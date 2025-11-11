@@ -5,6 +5,7 @@ import { resumableStreamTests } from "./tests";
 import { createPostgresResumableStreamContext } from "../postgres";
 import { DEFAULT_CHUNK_TABLE, DEFAULT_SCHEMA, DEFAULT_SESSION_TABLE } from "../postgres/schema";
 import { quoteIdentifier } from "../postgres/utils";
+import type { PostgresPoolLike } from "../postgres/types";
 import { createTestingStream, streamToBuffer } from "../../testing-utils/testing-stream";
 
 const POSTGRES_URL = process.env.POSTGRES_URL;
@@ -110,6 +111,116 @@ if (!POSTGRES_URL) {
       expect(producerRemainder).toEqual("world\n");
       expect(followerResult).toEqual("hello\nworld\n");
       await followerContext.close();
+    });
+
+    it("delivers chunks to multiple concurrent followers", async () => {
+      const keyPrefix = "postgres-concurrent-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("group", () => readable);
+
+      const follower1Promise = localContext.resumableStream("group", () => readable);
+      const follower2Promise = localContext.resumableStream("group", () => readable);
+
+      writer.write("1\n");
+      writer.write("2\n");
+      writer.close();
+
+      const follower1Stream = await follower1Promise;
+      const follower2Stream = await follower2Promise;
+
+      const [producerResult, follower1Result, follower2Result] = await Promise.all([
+        streamToBuffer(producer),
+        streamToBuffer(follower1Stream),
+        streamToBuffer(follower2Stream),
+      ]);
+
+      expect(producerResult).toEqual("1\n2\n");
+      expect(follower1Result).toEqual("1\n2\n");
+      expect(follower2Result).toEqual("1\n2\n");
+    });
+
+    it("falls back to polling when LISTEN is unavailable", async () => {
+      const keyPrefix = "postgres-polling-" + crypto.randomUUID();
+      const listenerStub: PostgresPoolLike = {
+        query: (text: string, params?: unknown[]) => pool.query(text, params),
+        connect: async () => ({
+          query: async () => ({ rows: [] }),
+          release: async () => {},
+        }),
+      };
+
+      localContext = createPostgresResumableStreamContext({
+        ...baseOptions(keyPrefix),
+        listenerPool: listenerStub,
+      });
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("poll", () => readable);
+      const followerPromise = localContext.resumableStream("poll", () => readable);
+
+      writer.write("chunk\n");
+      writer.close();
+
+      const follower = await followerPromise;
+      const [producerResult, followerResult] = await Promise.all([
+        streamToBuffer(producer),
+        streamToBuffer(follower),
+      ]);
+
+      expect(producerResult).toEqual("chunk\n");
+      expect(followerResult).toEqual("chunk\n");
+    });
+
+    it("supports explicit retention cleanup", async () => {
+      const keyPrefix = "postgres-retention-" + crypto.randomUUID();
+      const streamId = "retained";
+      const namespacedId = `${keyPrefix}:rs:${streamId}`;
+      localContext = createPostgresResumableStreamContext({
+        ...baseOptions(keyPrefix),
+        retentionSeconds: 1,
+      });
+
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream(streamId, () => readable);
+      writer.write("ttl\n");
+      writer.close();
+      await streamToBuffer(producer);
+
+      await pool.query(
+        `UPDATE ${sessionTable} SET expires_at = NOW() - INTERVAL '1 minute' WHERE stream_id = $1`,
+        [namespacedId]
+      );
+      await pool.query(`DELETE FROM ${chunkTable} WHERE stream_id = $1`, [namespacedId]);
+      await pool.query(`DELETE FROM ${sessionTable} WHERE expires_at < NOW()`);
+
+      expect(await localContext.hasExistingStream(streamId)).toBeNull();
+    });
+
+    it("resumes mid-chunk using skipCharacters", async () => {
+      const keyPrefix = "postgres-skip-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("chunky", () => readable);
+      writer.write("abcdef");
+      const followerPromise = localContext.resumableStream("chunky", () => readable, 3);
+      writer.close();
+      await streamToBuffer(producer);
+
+      const follower = await followerPromise;
+      const followerResult = await streamToBuffer(follower);
+      expect(followerResult).toEqual("def");
+    });
+
+    it("closes followers after stream completion", async () => {
+      const keyPrefix = "postgres-done-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("close", () => readable);
+      const follower = await localContext.resumableStream("close", () => readable);
+      writer.write("done\n");
+      writer.close();
+      await Promise.all([streamToBuffer(producer), streamToBuffer(follower)]);
+      expect(await localContext.hasExistingStream("close")).toBe("DONE");
     });
   });
 }
