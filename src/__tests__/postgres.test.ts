@@ -33,6 +33,13 @@ if (!POSTGRES_URL) {
 
   let context: ReturnType<typeof createPostgresResumableStreamContext> | null = null;
 
+  const closePool = async (client: Pool) => {
+    await Promise.race([
+      client.end(),
+      new Promise((resolve) => setTimeout(resolve, 5000)),
+    ]);
+  };
+
   beforeAll(async () => {
     await pool.query(DEFAULT_SCHEMA);
   });
@@ -43,9 +50,9 @@ if (!POSTGRES_URL) {
 
   afterAll(async () => {
     await context?.close?.();
-    await listenerPool.end();
-    await pool.end();
-  });
+    await closePool(listenerPool);
+    await closePool(pool);
+  }, 20000);
 
   resumableStreamTests(() => {
     context = createPostgresResumableStreamContext(baseOptions());
@@ -221,6 +228,54 @@ if (!POSTGRES_URL) {
       writer.close();
       await Promise.all([streamToBuffer(producer), streamToBuffer(follower)]);
       expect(await localContext.hasExistingStream("close")).toBe("DONE");
+    });
+
+    it("recovers when the producer context is closed mid-stream", async () => {
+      const keyPrefix = "postgres-crash-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("crash", () => readable);
+      writer.write("partial\n");
+      await streamToBuffer(producer, 1);
+      await localContext.close();
+
+      const followerContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const follower = await followerContext.resumableStream("crash", () => readable);
+      const followerResultPromise = streamToBuffer(follower, 1);
+      await pool.query(
+        `UPDATE ${sessionTable} SET status = 'done', updated_at = NOW() WHERE stream_id = $1`,
+        [`${keyPrefix}:rs:crash`]
+      );
+      const followerResult = await followerResultPromise;
+      expect(followerResult).toEqual("partial\n");
+      await followerContext.close();
+    });
+
+    it("handles repeated retention cleanup cycles", async () => {
+      const keyPrefix = "postgres-retention-cycle-" + crypto.randomUUID();
+
+      for (let i = 0; i < 3; i++) {
+        const ctx = createPostgresResumableStreamContext({
+          ...baseOptions(keyPrefix),
+          retentionSeconds: 1,
+        });
+        const { readable, writer } = createTestingStream();
+        const stream = await ctx.resumableStream(`cycle-${i}`, () => readable);
+        writer.write(`cycle-${i}\n`);
+        writer.close();
+        await streamToBuffer(stream);
+        await ctx.close();
+        await pool.query(
+          `DELETE FROM ${chunkTable} WHERE stream_id LIKE $1 AND created_at < NOW()`,
+          [`${keyPrefix}:rs:%`]
+        );
+        await pool.query(`DELETE FROM ${sessionTable} WHERE stream_id LIKE $1`, [
+          `${keyPrefix}:rs:%`,
+        ]);
+      }
+
+      await pool.query(`VACUUM ${chunkTable}`);
+      await pool.query(`VACUUM ${sessionTable}`);
     });
   });
 }
