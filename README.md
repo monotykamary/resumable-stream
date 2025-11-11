@@ -145,6 +145,12 @@ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm v
 POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm vitest run
 ```
 
+To simulate a crash/WAL recovery with Docker, use the helper script (requires the compose setup above):
+
+```bash
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm tsx scripts/postgres-wal-test.ts
+```
+
 ## Type Docs
 
 [Type Docs](https://github.com/vercel/resumable-stream/blob/main/docs/README.md)

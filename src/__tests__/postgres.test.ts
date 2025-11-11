@@ -18,8 +18,19 @@ if (!POSTGRES_URL) {
     });
   });
 } else {
+  function silenceAdminTermination(p: Pool) {
+    p.on("error", (error) => {
+      if ((error as { code?: string })?.code === "57P01") {
+        return;
+      }
+      console.error(error);
+    });
+  }
+
   const pool = new Pool({ connectionString: POSTGRES_URL });
+  silenceAdminTermination(pool);
   const listenerPool = new Pool({ connectionString: POSTGRES_URL });
+  silenceAdminTermination(listenerPool);
   const chunkTable = quoteIdentifier(DEFAULT_CHUNK_TABLE);
   const sessionTable = quoteIdentifier(DEFAULT_SESSION_TABLE);
 
@@ -354,4 +365,5 @@ if (!POSTGRES_URL) {
       await pool.query(`VACUUM ${sessionTable}`);
     });
   });
+
 }
