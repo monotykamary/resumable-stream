@@ -42,60 +42,63 @@ export function createResumableStreamContextFactory(defaults: _Private.RedisDefa
       initPromises.push(ctx.publisher.connect());
     }
 
-    return {
-      resumeExistingStream: async (
-        streamId: string,
-        skipCharacters?: number
-      ): Promise<ReadableStream<string> | null | undefined> => {
-        return resumeExistingStream(
-          Promise.all(initPromises),
-          ctx as CreateResumableStreamContext,
-          streamId,
-          skipCharacters
-        );
-      },
-      createNewResumableStream: async (
-        streamId: string,
-        makeStream: () => ReadableStream<string>,
-        skipCharacters?: number
-      ): Promise<ReadableStream<string> | null> => {
-        const initPromise = Promise.all(initPromises);
-        await initPromise;
-        await ctx.publisher.set(`${ctx.keyPrefix}:sentinel:${streamId}`, "1", {
-          EX: 24 * 60 * 60,
-        });
-        return createNewResumableStream(
-          initPromise,
-          ctx as CreateResumableStreamContext,
-          streamId,
-          makeStream
-        );
-      },
-      resumableStream: async (
-        streamId: string,
-        makeStream: () => ReadableStream<string>,
-        skipCharacters?: number
-      ): Promise<ReadableStream<string> | null> => {
-        return createResumableStream(
-          Promise.all(initPromises),
-          ctx as CreateResumableStreamContext,
-          streamId,
-          makeStream,
-          skipCharacters
-        );
-      },
-      hasExistingStream: async (streamId: string): Promise<null | true | "DONE"> => {
-        const state = await ctx.publisher.get(`${ctx.keyPrefix}:sentinel:${streamId}`);
-        if (state === null) {
-          return null;
-        }
-        if (state === DONE_VALUE) {
-          return DONE_VALUE;
-        }
-        return true;
-      },
-    } as const;
+    return new RedisResumableStreamContext(ctx as CreateResumableStreamContext, initPromises);
   };
+}
+
+class RedisResumableStreamContext implements ResumableStreamContext {
+  private readonly initPromise: Promise<unknown>;
+
+  constructor(
+    private readonly ctx: CreateResumableStreamContext,
+    initPromises: Promise<unknown>[]
+  ) {
+    this.initPromise = Promise.all(initPromises);
+  }
+
+  async resumeExistingStream(
+    streamId: string,
+    skipCharacters?: number
+  ): Promise<ReadableStream<string> | null | undefined> {
+    return resumeExistingStream(this.initPromise, this.ctx, streamId, skipCharacters);
+  }
+
+  async createNewResumableStream(
+    streamId: string,
+    makeStream: () => ReadableStream<string>,
+    skipCharacters?: number
+  ): Promise<ReadableStream<string> | null> {
+    await this.initPromise;
+    await this.ctx.publisher.set(`${this.ctx.keyPrefix}:sentinel:${streamId}`, "1", {
+      EX: STREAM_TTL_SECONDS,
+    });
+    return createNewResumableStream(this.initPromise, this.ctx, streamId, makeStream);
+  }
+
+  async resumableStream(
+    streamId: string,
+    makeStream: () => ReadableStream<string>,
+    skipCharacters?: number
+  ): Promise<ReadableStream<string> | null> {
+    return createResumableStream(
+      this.initPromise,
+      this.ctx,
+      streamId,
+      makeStream,
+      skipCharacters
+    );
+  }
+
+  async hasExistingStream(streamId: string): Promise<null | true | "DONE"> {
+    const state = await this.ctx.publisher.get(`${this.ctx.keyPrefix}:sentinel:${streamId}`);
+    if (state === null) {
+      return null;
+    }
+    if (state === DONE_VALUE) {
+      return DONE_VALUE;
+    }
+    return true;
+  }
 }
 
 interface ResumeStreamMessage {
@@ -106,6 +109,7 @@ interface ResumeStreamMessage {
 const DONE_MESSAGE = "\n\n\nDONE_SENTINEL_hasdfasudfyge374%$%^$EDSATRTYFtydryrte\n";
 
 const DONE_VALUE = "DONE";
+const STREAM_TTL_SECONDS = 24 * 60 * 60;
 
 async function resumeExistingStream(
   initPromise: Promise<unknown>,
@@ -182,7 +186,7 @@ async function createNewResumableStream(
             debugLog("setting sentinel to done");
             promises.push(
               ctx.publisher.set(`${ctx.keyPrefix}:sentinel:${streamId}`, DONE_VALUE, {
-                EX: 24 * 60 * 60,
+                EX: STREAM_TTL_SECONDS,
               })
             );
             promises.push(ctx.subscriber.unsubscribe(`${ctx.keyPrefix}:request:${streamId}`));

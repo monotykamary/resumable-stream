@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll } from "vitest";
 import { createTestingStream, streamToBuffer } from "../../testing-utils/testing-stream";
 import {
   createResumableStreamContext as createRedisResumableStreamContext,
@@ -9,30 +9,39 @@ import {
 import { createResumableStreamContext as createIoredisResumableStreamContext } from "../ioredis";
 import Redis from "ioredis";
 
+type RedisFactory = () => {
+  subscriber: Subscriber | Redis | undefined;
+  publisher: Publisher | Redis | undefined;
+};
+
+type ContextFactory = () => ResumableStreamContext;
+
 export function resumableStreamTests(
-  pubsubFactory: () => {
-    subscriber: Subscriber | Redis | undefined;
-    publisher: Publisher | Redis | undefined;
-  },
-  entrypoint: "redis" | "ioredis"
+  factory: RedisFactory | ContextFactory,
+  entrypoint: "redis" | "ioredis" | "postgres"
 ) {
   describe("resumable stream", () => {
-    const createResumableStreamContext =
-      entrypoint === "redis"
-        ? createRedisResumableStreamContext
-        : createIoredisResumableStreamContext;
-
     let resume: ResumableStreamContext;
 
-    beforeEach(async () => {
-      const { subscriber, publisher } = pubsubFactory();
-      resume = createResumableStreamContext({
-        waitUntil: () => Promise.resolve(),
-        subscriber,
-        publisher,
-        keyPrefix: "test-resumable-stream-" + crypto.randomUUID(),
+    if (entrypoint === "postgres") {
+      beforeAll(() => {
+        resume = (factory as ContextFactory)();
       });
-    });
+    } else {
+      beforeEach(async () => {
+        const { subscriber, publisher } = (factory as RedisFactory)();
+        const createResumableStreamContext =
+          entrypoint === "redis"
+            ? createRedisResumableStreamContext
+            : createIoredisResumableStreamContext;
+        resume = createResumableStreamContext({
+          waitUntil: () => Promise.resolve(),
+          subscriber,
+          publisher,
+          keyPrefix: "test-resumable-stream-" + crypto.randomUUID(),
+        });
+      });
+    }
 
     it("should act like a normal stream", async () => {
       const { readable, writer } = createTestingStream();
@@ -74,6 +83,10 @@ export function resumableStreamTests(
       expect(result).toEqual("1\n2\n");
       expect(result2).toEqual("1\n2\n");
       expect(await resume.hasExistingStream("test")).toBe("DONE");
+    });
+
+    it("returns undefined when resuming a missing stream", async () => {
+      expect(await resume.resumeExistingStream("missing")).toBeUndefined();
     });
 
     it("should resume a done stream reverse read", async () => {

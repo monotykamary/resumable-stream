@@ -32,7 +32,8 @@
     "build": "tsc -p tsconfig.build.json && pnpm run docs",
     "prepublishOnly": "pnpm build && test -d dist && test -n \"$(ls -A dist)\" || (echo 'ERROR: dist/ is empty or does not exist' && exit 1)",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "docs": "rimraf docs && pnpm typedoc"
+    "docs": "rimraf docs && pnpm typedoc",
+    "postgres:setup": "tsx scripts/setup-postgres.ts"
   },
   "devDependencies": {
     "@types/node": "^20",
@@ -42,13 +43,15 @@
     "dotenv": "^16.5.0",
     "ioredis": "^5.6.1",
     "next": "^15",
+    "pg": "^8.16.3",
     "prettier": "^3.2.5",
     "redis": "^4.7.0",
     "rimraf": "^6.0.1",
     "typedoc": "^0.28.3",
     "typedoc-plugin-markdown": "^4.6.2",
     "typescript": "^5.9.3",
-    "vitest": "^3.1.1"
+    "vitest": "^4.0.8",
+    "tsx": "^4.20.6"
   },
   "keywords": [],
   "author": "",

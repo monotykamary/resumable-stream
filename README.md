@@ -5,9 +5,10 @@ a client can resume them after they lost a connection, or to allow a second clie
 
 Designed for use in serverless environments without sticky load balancing.
 
-The library relies on a pubsub mechanism and is designed to be used with Redis. It was designed to
+The library relies on a pubsub mechanism and ships Redis transports by default. It was designed to
 minimize latency impact and Redis usage for the common case that stream recovery is not needed.
-In that common case the library performs a single `INCR` and `SUBSCRIBE` per stream.
+In that common case the library performs a single `INCR` and `SUBSCRIBE` per stream. A Postgres
+transport is also available when you want durable persistence across producer restarts.
 
 ## Usage
 
@@ -98,6 +99,49 @@ const streamContext = createResumableStreamContext({
   waitUntil: after,
   // Optionally pass in your own Redis publisher and subscriber
 });
+```
+
+### Usage with Postgres
+
+```typescript
+import { Pool } from "pg";
+import { createPostgresResumableStreamContext } from "resumable-stream";
+
+const streamContext = createPostgresResumableStreamContext({
+  pool: new Pool({ connectionString: process.env.POSTGRES_URL! }),
+  waitUntil: after,
+  // Optional: dedicate a listener pool if you want LISTEN/NOTIFY isolation
+  // listenerPool: new Pool({ connectionString: process.env.POSTGRES_URL! }),
+  // keyPrefix and retentionSeconds share the same defaults as the Redis context
+});
+
+export async function GET(req: NextRequest) {
+  const stream = await streamContext.resumableStream("my-stream", makeTestStream);
+  return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+```
+
+Before running the Postgres adapter, apply the schema:
+
+```bash
+export POSTGRES_URL=postgres://user:pass@host:5432/db
+pnpm postgres:setup
+```
+
+For local development a Postgres 16 compose file is included:
+
+```bash
+docker compose up -d postgres
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:setup
+```
+
+Run the Postgres-focused tests (or the entire suite) with the same environment variable:
+
+```bash
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm vitest run src/__tests__/postgres.test.ts
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm vitest run
 ```
 
 ## Type Docs
