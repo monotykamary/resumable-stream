@@ -47,6 +47,16 @@ export interface CreatePostgresResumableStreamContextOptions
    * Name of the table storing chunk rows.
    */
   chunkTableName?: string;
+  /**
+   * How long followers should wait for LISTEN notifications before falling back to polling.
+   * Defaults to 500ms.
+   */
+  listenTimeoutMs?: number;
+  /**
+   * Interval between poll attempts when no new notifications are available.
+   * Defaults to 50ms.
+   */
+  pollIntervalMs?: number;
 }
 
 export type PostgresStreamStatus = "pending" | "streaming" | "done";

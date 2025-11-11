@@ -13,7 +13,8 @@ import { PostgresNotifier } from "./postgres/notifier";
 import { delay, quoteIdentifier, sanitizeChannelName, toNumber } from "./postgres/utils";
 
 const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
-const POLL_INTERVAL_MS = 50;
+const DEFAULT_POLL_INTERVAL_MS = 50;
+const DEFAULT_LISTEN_TIMEOUT_MS = 500;
 
 type InternalPostgresOptions = {
   pool: PostgresPoolLike;
@@ -23,6 +24,8 @@ type InternalPostgresOptions = {
   chunkTableName: string;
   retentionSeconds: number;
   keyPrefix: string;
+  pollIntervalMs: number;
+  listenTimeoutMs: number;
 };
 
 type ChunkRow = {
@@ -45,6 +48,8 @@ export function createPostgresResumableStreamContext(
     sessionTableName: options.sessionTableName || DEFAULT_SESSION_TABLE,
     retentionSeconds: options.retentionSeconds || DEFAULT_RETENTION_SECONDS,
     keyPrefix,
+    pollIntervalMs: Math.max(5, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS),
+    listenTimeoutMs: Math.max(50, options.listenTimeoutMs ?? DEFAULT_LISTEN_TIMEOUT_MS),
   };
 
   return new PostgresResumableStreamContext(internalOptions);
@@ -61,7 +66,11 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     this.chunkTable = quoteIdentifier(options.chunkTableName);
     this.retentionIntervalLiteral = `${options.retentionSeconds} seconds`;
     const channelName = sanitizeChannelName(`${options.chunkTableName}${LISTEN_CHANNEL_SUFFIX}`);
-    this.notifier = new PostgresNotifier(options.listenerPool ?? options.pool, channelName);
+    this.notifier = new PostgresNotifier(
+      options.listenerPool ?? options.pool,
+      channelName,
+      options.listenTimeoutMs
+    );
   }
 
   async resumableStream(
@@ -216,7 +225,11 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
             const { done, value } = await reader.read();
             if (done) {
               await this.markStreamDone(streamId);
-              await this.notifier.notify({ streamId, event: "done" });
+              try {
+                await this.notifier.notify({ streamId, event: "done" });
+              } catch {
+                // notification failures are tolerated; followers will poll the DB
+              }
               controller.close();
               doneResolver?.();
               return;
@@ -227,7 +240,11 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
             controller.enqueue(value);
             const { seq, endOffset } = await this.persistChunk(streamId, value, lastOffset);
             lastOffset = endOffset;
-            await this.notifier.notify({ streamId, event: "chunk", seq });
+            try {
+              await this.notifier.notify({ streamId, event: "chunk", seq });
+            } catch {
+              // swallow notifier errors; polling path will pick up the chunk
+            }
           }
         } catch (error) {
           controller.error(error);
@@ -310,7 +327,7 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
   private async waitForMore(streamId: string): Promise<void> {
     const payload = await this.notifier.waitFor(streamId);
     if (!payload) {
-      await delay(POLL_INTERVAL_MS);
+      await delay(this.options.pollIntervalMs);
     }
   }
 

@@ -11,8 +11,6 @@ export type NotifierPayload = {
   event: "chunk" | "done";
 };
 
-const NOTIFY_TIMEOUT_MS = 500;
-
 export class PostgresNotifier {
   private clientPromise?: Promise<PostgresClientLike | null>;
   private listeners = new Map<string, Set<(payload: NotifierPayload) => void>>();
@@ -20,7 +18,11 @@ export class PostgresNotifier {
   private readonly quotedChannel?: string;
   private notificationHandler?: (payload: PostgresNotification) => void;
 
-  constructor(private readonly pool?: PostgresPoolLike, channel?: string) {
+  constructor(
+    private readonly pool: PostgresPoolLike | undefined,
+    channel: string | undefined,
+    private readonly listenTimeoutMs: number
+  ) {
     if (pool && channel) {
       const sanitized = sanitizeChannelName(channel);
       this.channelName = sanitized;
@@ -38,14 +40,14 @@ export class PostgresNotifier {
   async waitFor(streamId: string): Promise<NotifierPayload | null> {
     const client = await this.ensureClient();
     if (!client) {
-      await delay(NOTIFY_TIMEOUT_MS);
+      await delay(this.listenTimeoutMs);
       return null;
     }
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         cleanup();
         resolve(null);
-      }, NOTIFY_TIMEOUT_MS);
+      }, this.listenTimeoutMs);
       const listener = (payload: NotifierPayload) => {
         if (payload.streamId !== streamId) {
           return;

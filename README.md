@@ -113,6 +113,7 @@ const streamContext = createPostgresResumableStreamContext({
   // Optional: dedicate a listener pool if you want LISTEN/NOTIFY isolation
   // listenerPool: new Pool({ connectionString: process.env.POSTGRES_URL! }),
   // keyPrefix and retentionSeconds share the same defaults as the Redis context
+  // pollIntervalMs / listenTimeoutMs let you tune LISTEN fallback vs. polling
 });
 
 export async function GET(req: NextRequest) {

@@ -29,6 +29,8 @@ if (!POSTGRES_URL) {
     waitUntil: () => Promise.resolve(),
     keyPrefix,
     retentionSeconds: 60,
+    pollIntervalMs: 25,
+    listenTimeoutMs: 200,
   });
 
   let context: ReturnType<typeof createPostgresResumableStreamContext> | null = null;
@@ -150,9 +152,13 @@ if (!POSTGRES_URL) {
     it("falls back to polling when LISTEN is unavailable", async () => {
       const keyPrefix = "postgres-polling-" + crypto.randomUUID();
       const listenerStub: PostgresPoolLike = {
-        query: (text: string, params?: unknown[]) => pool.query(text, params),
+        query: async () => {
+          throw new Error("notify disabled");
+        },
         connect: async () => ({
-          query: async () => ({ rows: [] }),
+          query: async () => {
+            throw new Error("listen disabled");
+          },
           release: async () => {},
         }),
       };
@@ -176,6 +182,48 @@ if (!POSTGRES_URL) {
 
       expect(producerResult).toEqual("chunk\n");
       expect(followerResult).toEqual("chunk\n");
+    });
+
+    it("streams hundreds of chunks without loss", async () => {
+      const keyPrefix = "postgres-bulk-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("bulk", () => readable);
+      const follower = await localContext.resumableStream("bulk", () => readable);
+      for (let i = 0; i < 200; i++) {
+        writer.write(`line-${i}\n`);
+      }
+      writer.close();
+      const [producerResult, followerResult] = await Promise.all([
+        streamToBuffer(producer),
+        streamToBuffer(follower),
+      ]);
+      expect(producerResult).toEqual(followerResult);
+      expect(followerResult.split("\n").filter(Boolean).length).toBe(200);
+    });
+
+    it("runs makeStream once even with simultaneous producer calls", async () => {
+      const keyPrefix = "postgres-single-producer-" + crypto.randomUUID();
+      const ctxA = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const ctxB = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      let invocations = 0;
+      const streamFactory = () => {
+        invocations++;
+        return readable;
+      };
+      const [streamA, streamB] = await Promise.all([
+        ctxA.resumableStream("race", streamFactory),
+        ctxB.resumableStream("race", streamFactory),
+      ]);
+      writer.write("winning\n");
+      writer.close();
+      const [resultA, resultB] = await Promise.all([streamToBuffer(streamA), streamToBuffer(streamB)]);
+      expect(resultA).toEqual("winning\n");
+      expect(resultB).toEqual("winning\n");
+      expect(invocations).toBe(1);
+      await ctxA.close();
+      await ctxB.close();
     });
 
     it("supports explicit retention cleanup", async () => {
@@ -218,6 +266,20 @@ if (!POSTGRES_URL) {
       expect(followerResult).toEqual("def");
     });
 
+    it("returns empty string when skipping entire backlog", async () => {
+      const keyPrefix = "postgres-skip-empty-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("empty", () => readable);
+      writer.write("small");
+      const followerPromise = localContext.resumableStream("empty", () => readable, 10);
+      writer.close();
+      await streamToBuffer(producer);
+      const follower = await followerPromise;
+      const followerResult = await streamToBuffer(follower);
+      expect(followerResult).toEqual("");
+    });
+
     it("closes followers after stream completion", async () => {
       const keyPrefix = "postgres-done-" + crypto.randomUUID();
       localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
@@ -228,6 +290,20 @@ if (!POSTGRES_URL) {
       writer.close();
       await Promise.all([streamToBuffer(producer), streamToBuffer(follower)]);
       expect(await localContext.hasExistingStream("close")).toBe("DONE");
+    });
+
+    it("allows followers to cancel without impacting producers", async () => {
+      const keyPrefix = "postgres-cancel-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("cancel", () => readable);
+      const follower = await localContext.resumableStream("cancel", () => readable);
+      const reader = follower.getReader();
+      await reader.cancel();
+      writer.write("still\n");
+      writer.close();
+      const producerResult = await streamToBuffer(producer);
+      expect(producerResult).toEqual("still\n");
     });
 
     it("recovers when the producer context is closed mid-stream", async () => {
