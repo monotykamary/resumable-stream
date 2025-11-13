@@ -152,6 +152,17 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
       await this.options.pool.query(`DELETE FROM ${this.chunkTable} WHERE stream_id = $1`, [streamId]);
       return true;
     }
+    const { rows: reclaimed } = await this.options.pool.query<{ stream_id: string }>(
+      `UPDATE ${this.sessionTable}
+       SET status = 'streaming', last_offset = 0, updated_at = NOW(), expires_at = NOW() + INTERVAL '${this.retentionIntervalLiteral}'
+       WHERE stream_id = $1 AND status = 'failed'
+       RETURNING stream_id`,
+      [streamId]
+    );
+    if (reclaimed.length) {
+      await this.options.pool.query(`DELETE FROM ${this.chunkTable} WHERE stream_id = $1`, [streamId]);
+      return true;
+    }
     return false;
   }
 
@@ -208,7 +219,7 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     streamId: string,
     makeStream: () => ReadableStream<string>
   ): ReadableStream<string> {
-    let cancelled = false;
+    let controllerClosed = false;
     let doneResolver: (() => void) | undefined;
     let reader: ReadableStreamDefaultReader<string> | null = null;
     const donePromise = new Promise<void>((resolve) => {
@@ -221,7 +232,7 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
         reader = makeStream().getReader();
         let lastOffset = await this.getLastOffset(streamId);
         try {
-          while (!cancelled) {
+          while (true) {
             const { done, value } = await reader.read();
             if (done) {
               await this.markStreamDone(streamId);
@@ -230,14 +241,27 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
               } catch {
                 // notification failures are tolerated; followers will poll the DB
               }
-              controller.close();
+              if (!controllerClosed) {
+                try {
+                  controller.close();
+                } catch {
+                  // ignore errors if the consumer already detached
+                }
+                controllerClosed = true;
+              }
               doneResolver?.();
               return;
             }
             if (typeof value !== "string") {
               continue;
             }
-            controller.enqueue(value);
+            if (!controllerClosed) {
+              try {
+                controller.enqueue(value);
+              } catch {
+                controllerClosed = true;
+              }
+            }
             const { seq, endOffset } = await this.persistChunk(streamId, value, lastOffset);
             lastOffset = endOffset;
             try {
@@ -247,13 +271,20 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
             }
           }
         } catch (error) {
-          controller.error(error);
+          await this.handleProducerFailure(streamId);
+          if (!controllerClosed) {
+            try {
+              controller.error(error);
+            } catch {
+              // ignore secondary failures while surfacing the original error
+            }
+            controllerClosed = true;
+          }
           doneResolver?.();
         }
       },
       cancel: async () => {
-        cancelled = true;
-        await reader?.cancel();
+        controllerClosed = true;
       },
     });
   }
@@ -279,7 +310,7 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
           }
 
           const status = await this.getStreamStatus(streamId);
-          if (status === "done" && !chunks.length) {
+          if ((status === "done" || status === "failed") && !chunks.length) {
             controller.close();
             return;
           }
@@ -344,6 +375,19 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
 
   async close(): Promise<void> {
     await this.notifier.close();
+  }
+
+  private async handleProducerFailure(streamId: string): Promise<void> {
+    try {
+      await this.options.pool.query(
+        `UPDATE ${this.sessionTable}
+         SET status = 'failed', updated_at = NOW(), expires_at = NOW() + INTERVAL '${this.retentionIntervalLiteral}'
+         WHERE stream_id = $1`,
+        [streamId]
+      );
+    } catch {
+      // best-effort cleanup; leave row for external maintenance if this fails
+    }
   }
 }
 

@@ -124,6 +124,25 @@ export async function GET(req: NextRequest) {
 }
 ```
 
+Unlike the Redis transport (which keeps all buffered chunks in memory), the Postgres adapter persists backlog to tables. If a producer crashes, the session status becomes `failed` instead of deleting the saved output. Followers can still drain the backlog and a future producer call will automatically reclaim the ID and start fresh:
+
+```ts
+const status = await streamContext.hasExistingStream("my-stream");
+if (status === "failed") {
+  const backlog = await streamContext.resumeExistingStream("my-stream");
+  if (backlog) {
+    // Send the partial transcript to the reconnecting client.
+  }
+}
+
+// Whenever you're ready to restart the LLM call, just invoke resumableStream again.
+const restarted = await streamContext.resumableStream("my-stream", makeStream);
+```
+
+Because Redis drops state when the producer process dies, it never reports `failed`. Seeing that status is specific to the Postgres transport, and simply indicates “last producer crashed but chunks are still stored.”
+
+If your application never reuses stream IDs after a failure, you can simply start a new ID and wait for cleanup to purge the old data. But if you treat the ID as the logical conversation (the usual resumable-stream use case), just call `resumableStream` with the same ID after rerunning your LLM call; the adapter automatically clears the failed backlog and begins emitting new chunks under that identifier.
+
 Before running the Postgres adapter, apply the schema:
 
 ```bash
@@ -149,6 +168,52 @@ To simulate a crash/WAL recovery with Docker, use the helper script (requires th
 
 ```bash
 POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm tsx scripts/postgres-wal-test.ts
+```
+
+When a producer crashes mid-stream, the Postgres transport marks the session as `failed` and keeps the persisted backlog available for reconnecting followers. The next successful producer call automatically resets the session and starts a fresh stream.
+
+### Retention cleanup
+
+Postgres never deletes old stream state automatically. Schedule the cleanup script (or run it manually) to purge rows whose `expires_at` has elapsed:
+
+```bash
+POSTGRES_URL=postgres://user:pass@host:5432/db pnpm postgres:cleanup
+```
+
+If you override the default session table name, set `POSTGRES_SESSION_TABLE` before running the script. The chunk table uses `ON DELETE CASCADE`, so removing expired sessions removes their chunks as well.
+
+You can also automate cleanup instead of invoking the script manually:
+
+```sql
+-- With pg_cron (https://github.com/citusdata/pg_cron)
+SELECT cron.schedule(
+  'rs-session-cleanup',
+  '*/15 * * * *',
+  $$DELETE FROM rs_stream_sessions WHERE expires_at IS NOT NULL AND expires_at < NOW();$$
+);
+```
+
+```ts
+// Or schedule it inside your server if you don't have pg_cron available
+import { Pool } from "pg";
+import { DEFAULT_SESSION_TABLE } from "resumable-stream/postgres/schema";
+
+const pool = new Pool({ connectionString: process.env.POSTGRES_URL! });
+
+async function cleanupExpiredSessions() {
+  await pool.query(
+    `DELETE FROM ${DEFAULT_SESSION_TABLE} WHERE expires_at IS NOT NULL AND expires_at < NOW()`
+  );
+}
+
+setInterval(
+  () => {
+    cleanupExpiredSessions().catch((err) => {
+      console.error("cleanup failed", err);
+    });
+  },
+  5 * 60 * 1000
+);
 ```
 
 ## Type Docs

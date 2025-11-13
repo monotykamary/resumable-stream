@@ -77,41 +77,67 @@ export class PostgresNotifier {
     }
     if (!this.clientPromise) {
       this.clientPromise = (async () => {
-        const client = await this.pool.connect();
-        if (!client.on) {
-          await client.release();
-          return null;
-        }
-        this.notificationHandler = (notification: PostgresNotification) => {
-          if (notification.channel !== this.channelName || !notification.payload) {
-            return;
+        let client: PostgresClientLike | null = null;
+        try {
+          client = await this.pool.connect();
+          if (!client.on) {
+            await client.release();
+            return null;
           }
-          try {
-            const payload = JSON.parse(notification.payload) as NotifierPayload;
-            const listeners = this.listeners.get(payload.streamId);
-            if (!listeners) {
+          this.notificationHandler = (notification: PostgresNotification) => {
+            if (notification.channel !== this.channelName || !notification.payload) {
               return;
             }
-            for (const listener of listeners) {
-              listener(payload);
+            try {
+              const payload = JSON.parse(notification.payload) as NotifierPayload;
+              const listeners = this.listeners.get(payload.streamId);
+              if (!listeners) {
+                return;
+              }
+              for (const listener of listeners) {
+                listener(payload);
+              }
+            } catch {
+              // ignore malformed payloads
             }
-          } catch {
-            // ignore malformed payloads
+          };
+          client.on("notification", this.notificationHandler);
+          await client.query(`LISTEN ${this.quotedChannel}`);
+          return client;
+        } catch (error) {
+          if (client) {
+            try {
+              await client.release();
+            } catch {
+              // ignore release errors while falling back to polling
+            }
           }
-        };
-        client.on("notification", this.notificationHandler);
-        await client.query(`LISTEN ${this.quotedChannel}`);
-        return client;
+          throw error;
+        }
       })();
     }
-    return this.clientPromise;
+    try {
+      const client = await this.clientPromise;
+      if (!client) {
+        this.clientPromise = undefined;
+      }
+      return client;
+    } catch {
+      this.clientPromise = undefined;
+      return null;
+    }
   }
 
   async close(): Promise<void> {
     if (!this.clientPromise) {
       return;
     }
-    const client = await this.clientPromise;
+    let client: PostgresClientLike | null;
+    try {
+      client = await this.clientPromise;
+    } catch {
+      client = null;
+    }
     if (!client) {
       return;
     }

@@ -33,7 +33,8 @@
     "prepublishOnly": "pnpm build && test -d dist && test -n \"$(ls -A dist)\" || (echo 'ERROR: dist/ is empty or does not exist' && exit 1)",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "docs": "rimraf docs && pnpm typedoc",
-    "postgres:setup": "tsx scripts/setup-postgres.ts"
+    "postgres:setup": "tsx scripts/setup-postgres.ts",
+    "postgres:cleanup": "tsx scripts/postgres-cleanup.ts"
   },
   "devDependencies": {
     "@types/node": "^20",

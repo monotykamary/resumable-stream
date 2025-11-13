@@ -59,4 +59,4 @@ export interface CreatePostgresResumableStreamContextOptions
   pollIntervalMs?: number;
 }
 
-export type PostgresStreamStatus = "pending" | "streaming" | "done";
+export type PostgresStreamStatus = "pending" | "streaming" | "done" | "failed";

@@ -160,6 +160,27 @@ if (!POSTGRES_URL) {
       expect(follower2Result).toEqual("1\n2\n");
     });
 
+    it("continues persisting after the original consumer cancels", async () => {
+      const keyPrefix = "postgres-producer-cancel-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("linger", () => readable);
+      const followerPromise = localContext.resumableStream("linger", () => readable);
+
+      writer.write("hello\n");
+      const reader = producer.getReader();
+      await reader.read();
+      await reader.cancel();
+
+      writer.write("world\n");
+      writer.close();
+
+      const follower = await followerPromise;
+      const followerResult = await streamToBuffer(follower);
+      expect(followerResult).toEqual("hello\nworld\n");
+      expect(await localContext.hasExistingStream("linger")).toBe("DONE");
+    });
+
     it("falls back to polling when LISTEN is unavailable", async () => {
       const keyPrefix = "postgres-polling-" + crypto.randomUUID();
       const listenerStub: PostgresPoolLike = {
@@ -181,6 +202,38 @@ if (!POSTGRES_URL) {
       const { readable, writer } = createTestingStream();
       const producer = await localContext.resumableStream("poll", () => readable);
       const followerPromise = localContext.resumableStream("poll", () => readable);
+
+      writer.write("chunk\n");
+      writer.close();
+
+      const follower = await followerPromise;
+      const [producerResult, followerResult] = await Promise.all([
+        streamToBuffer(producer),
+        streamToBuffer(follower),
+      ]);
+
+      expect(producerResult).toEqual("chunk\n");
+      expect(followerResult).toEqual("chunk\n");
+    });
+
+    it("falls back to polling when LISTEN connection fails", async () => {
+      const keyPrefix = "postgres-polling-fail-" + crypto.randomUUID();
+      const listenerStub: PostgresPoolLike = {
+        query: async () => {
+          throw new Error("notify disabled");
+        },
+        connect: async () => {
+          throw new Error("listen connect failed");
+        },
+      };
+
+      localContext = createPostgresResumableStreamContext({
+        ...baseOptions(keyPrefix),
+        listenerPool: listenerStub,
+      });
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("poll-fail", () => readable);
+      const followerPromise = localContext.resumableStream("poll-fail", () => readable);
 
       writer.write("chunk\n");
       writer.close();
@@ -363,6 +416,37 @@ if (!POSTGRES_URL) {
 
       await pool.query(`VACUUM ${chunkTable}`);
       await pool.query(`VACUUM ${sessionTable}`);
+    });
+
+    it("recovers when the upstream stream throws", async () => {
+      const keyPrefix = "postgres-producer-error-" + crypto.randomUUID();
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+
+      const {
+        readable: failingReadable,
+        writer: failingWriter,
+      } = createTestingStream();
+      const failing = await localContext.resumableStream("boom", () => failingReadable);
+      failingWriter.write("partial\n");
+      const firstChunk = await streamToBuffer(failing, 1);
+      expect(firstChunk).toEqual("partial\n");
+      await failingWriter.abort(new Error("boom"));
+
+      await expect(streamToBuffer(failing)).rejects.toThrow("boom");
+      expect(await localContext.hasExistingStream("boom")).toBe(true);
+
+      const backlog = await localContext.resumeExistingStream("boom");
+      expect(backlog).toBeDefined();
+      expect(await streamToBuffer(backlog!)).toEqual("partial\n");
+      expect(await localContext.hasExistingStream("boom")).toBe(true);
+
+      const { readable, writer } = createTestingStream();
+      const recovery = await localContext.resumableStream("boom", () => readable);
+      writer.write("ok\n");
+      writer.close();
+      const recovered = await streamToBuffer(recovery);
+      expect(recovered).toEqual("ok\n");
+      expect(await localContext.hasExistingStream("boom")).toBe("DONE");
     });
   });
 
