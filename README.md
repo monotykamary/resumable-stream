@@ -128,7 +128,7 @@ Unlike the Redis transport (which keeps all buffered chunks in memory), the Post
 
 ```ts
 const status = await streamContext.hasExistingStream("my-stream");
-if (status === "failed") {
+if (status === "FAILED") {
   const backlog = await streamContext.resumeExistingStream("my-stream");
   if (backlog) {
     // Send the partial transcript to the reconnecting client.
@@ -139,22 +139,24 @@ if (status === "failed") {
 const restarted = await streamContext.resumableStream("my-stream", makeStream);
 ```
 
-Because Redis drops state when the producer process dies, it never reports `failed`. Seeing that status is specific to the Postgres transport, and simply indicates “last producer crashed but chunks are still stored.”
+Because Redis drops state when the producer process dies, it never reports `FAILED`. Seeing that status is specific to the Postgres transport, and simply indicates “last producer crashed but chunks are still stored.”
 
 If your application never reuses stream IDs after a failure, you can simply start a new ID and wait for cleanup to purge the old data. But if you treat the ID as the logical conversation (the usual resumable-stream use case), just call `resumableStream` with the same ID after rerunning your LLM call; the adapter automatically clears the failed backlog and begins emitting new chunks under that identifier.
+
+> `hasExistingStream` uses the uppercase `"FAILED"` sentinel (similar to `"DONE"`) while the database column stores `failed`.
 
 Before running the Postgres adapter, apply the schema:
 
 ```bash
 export POSTGRES_URL=postgres://user:pass@host:5432/db
-pnpm postgres:setup
+npx resumable-stream-postgres-setup
 ```
 
 For local development a Postgres 16 compose file is included:
 
 ```bash
 docker compose up -d postgres
-POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:setup
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream npx resumable-stream-postgres-setup
 ```
 
 Run the Postgres-focused tests (or the entire suite) with the same environment variable:
@@ -177,7 +179,7 @@ When a producer crashes mid-stream, the Postgres transport marks the session as 
 Postgres never deletes old stream state automatically. Schedule the cleanup script (or run it manually) to purge rows whose `expires_at` has elapsed:
 
 ```bash
-POSTGRES_URL=postgres://user:pass@host:5432/db pnpm postgres:cleanup
+POSTGRES_URL=postgres://user:pass@host:5432/db npx resumable-stream-postgres-cleanup
 ```
 
 If you override the default session table name, set `POSTGRES_SESSION_TABLE` before running the script. The chunk table uses `ON DELETE CASCADE`, so removing expired sessions removes their chunks as well.

@@ -44,7 +44,7 @@ A readable stream of strings. Returns null if there was a stream with the given 
 
 ### hasExistingStream()
 
-> **hasExistingStream**: (`streamId`) => `Promise`\<`null` \| `true` \| `"DONE"`\>
+> **hasExistingStream**: (`streamId`) => `Promise`\<`null` \| `true` \| `"DONE"` \| `"FAILED"`\>
 
 Checks if a stream with the given streamId exists.
 
@@ -58,9 +58,11 @@ The ID of the stream.
 
 #### Returns
 
-`Promise`\<`null` \| `true` \| `"DONE"`\>
+`Promise`\<`null` \| `true` \| `"DONE"` \| `"FAILED"`\>
 
-null if there is no stream with the given streamId. True if a stream with the given streamId exists. "DONE" if the stream is fully done.
+null if there is no stream with the given streamId. True if a stream with the given streamId exists.
+"DONE" if the stream is fully done. "FAILED" (transport-specific) if the last producer crashed but chunk
+history is still persisted.
 
 ***
 

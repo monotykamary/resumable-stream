@@ -89,7 +89,7 @@ class RedisResumableStreamContext implements ResumableStreamContext {
     );
   }
 
-  async hasExistingStream(streamId: string): Promise<null | true | "DONE"> {
+  async hasExistingStream(streamId: string): Promise<null | true | "DONE" | "FAILED"> {
     const state = await this.ctx.publisher.get(`${this.ctx.keyPrefix}:sentinel:${streamId}`);
     if (state === null) {
       return null;

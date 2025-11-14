@@ -13,7 +13,10 @@
   "exports": {
     ".": "./dist/index.js",
     "./ioredis": "./dist/ioredis.js",
-    "./redis": "./dist/redis.js"
+    "./redis": "./dist/redis.js",
+    "./postgres": "./dist/postgres.js",
+    "./postgres/schema": "./dist/postgres/schema.js",
+    "./postgres/utils": "./dist/postgres/utils.js"
   },
   "typesVersions": {
     "*": {
@@ -22,6 +25,15 @@
       ],
       "redis": [
         "dist/redis.d.ts"
+      ],
+      "postgres": [
+        "dist/postgres.d.ts"
+      ],
+      "postgres/schema": [
+        "dist/postgres/schema.d.ts"
+      ],
+      "postgres/utils": [
+        "dist/postgres/utils.d.ts"
       ]
     }
   },
@@ -33,8 +45,12 @@
     "prepublishOnly": "pnpm build && test -d dist && test -n \"$(ls -A dist)\" || (echo 'ERROR: dist/ is empty or does not exist' && exit 1)",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "docs": "rimraf docs && pnpm typedoc",
-    "postgres:setup": "tsx scripts/setup-postgres.ts",
-    "postgres:cleanup": "tsx scripts/postgres-cleanup.ts"
+    "postgres:setup": "tsx src/cli/postgres-setup.ts",
+    "postgres:cleanup": "tsx src/cli/postgres-cleanup.ts"
+  },
+  "bin": {
+    "resumable-stream-postgres-setup": "./dist/cli/postgres-setup.js",
+    "resumable-stream-postgres-cleanup": "./dist/cli/postgres-cleanup.js"
   },
   "devDependencies": {
     "@types/node": "^20",

@@ -79,9 +79,12 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     skipCharacters?: number
   ): Promise<ReadableStream<string> | null> {
     const namespacedId = this.namespacedId(streamId);
-    const role = await this.determineStreamRole(namespacedId);
+    const { role, reclaimedFailed } = await this.determineStreamRole(
+      namespacedId,
+      skipCharacters !== undefined
+    );
     if (role === "producer") {
-      return this.createProducerStream(namespacedId, makeStream);
+      return this.createProducerStream(namespacedId, makeStream, reclaimedFailed);
     }
     if (role === "done") {
       return null;
@@ -111,36 +114,52 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
   ): Promise<ReadableStream<string> | null> {
     const namespacedId = this.namespacedId(streamId);
     await this.resetStreamState(namespacedId);
-    return this.createProducerStream(namespacedId, makeStream);
+    return this.createProducerStream(namespacedId, makeStream, false);
   }
 
-  async hasExistingStream(streamId: string): Promise<null | true | "DONE"> {
+  async hasExistingStream(streamId: string): Promise<null | true | "DONE" | "FAILED"> {
     const status = await this.getStreamStatus(this.namespacedId(streamId));
     if (!status) {
       return null;
     }
-    return status === "done" ? "DONE" : true;
+    if (status === "done") {
+      return "DONE";
+    }
+    if (status === "failed") {
+      return "FAILED";
+    }
+    return true;
   }
 
   private namespacedId(streamId: string): string {
     return `${this.options.keyPrefix}:${streamId}`;
   }
 
-  private async determineStreamRole(streamId: string): Promise<"producer" | "consumer" | "done"> {
-    if (await this.tryReserveStream(streamId)) {
-      return "producer";
+  private async determineStreamRole(
+    streamId: string,
+    skipProvided: boolean
+  ): Promise<{ role: "producer" | "consumer" | "done"; reclaimedFailed: boolean }> {
+    const reservation = await this.tryReserveStream(streamId, { allowFailedReclaim: !skipProvided });
+    if (reservation) {
+      return {
+        role: "producer",
+        reclaimedFailed: reservation === "reclaimed",
+      };
     }
     const status = await this.getStreamStatus(streamId);
     if (!status) {
-      if (await this.tryReserveStream(streamId)) {
-        return "producer";
-      }
-      return "consumer";
+      return { role: "consumer", reclaimedFailed: false };
     }
-    return status === "done" ? "done" : "consumer";
+    if (status === "done") {
+      return { role: "done", reclaimedFailed: false };
+    }
+    return { role: "consumer", reclaimedFailed: false };
   }
 
-  private async tryReserveStream(streamId: string): Promise<boolean> {
+  private async tryReserveStream(
+    streamId: string,
+    options: { allowFailedReclaim: boolean }
+  ): Promise<"fresh" | "reclaimed" | null> {
     const { rows } = await this.options.pool.query<{ stream_id: string }>(
       `INSERT INTO ${this.sessionTable} (stream_id, status, last_offset, created_at, updated_at, expires_at)
        VALUES ($1, 'streaming', 0, NOW(), NOW(), NOW() + INTERVAL '${this.retentionIntervalLiteral}')
@@ -149,8 +168,10 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
       [streamId]
     );
     if (rows.length) {
-      await this.options.pool.query(`DELETE FROM ${this.chunkTable} WHERE stream_id = $1`, [streamId]);
-      return true;
+      return "fresh";
+    }
+    if (!options.allowFailedReclaim) {
+      return null;
     }
     const { rows: reclaimed } = await this.options.pool.query<{ stream_id: string }>(
       `UPDATE ${this.sessionTable}
@@ -160,10 +181,9 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
       [streamId]
     );
     if (reclaimed.length) {
-      await this.options.pool.query(`DELETE FROM ${this.chunkTable} WHERE stream_id = $1`, [streamId]);
-      return true;
+      return "reclaimed";
     }
-    return false;
+    return null;
   }
 
   private async resetStreamState(streamId: string): Promise<void> {
@@ -217,7 +237,8 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
 
   private createProducerStream(
     streamId: string,
-    makeStream: () => ReadableStream<string>
+    makeStream: () => ReadableStream<string>,
+    clearPersistedChunks: boolean
   ): ReadableStream<string> {
     let controllerClosed = false;
     let doneResolver: (() => void) | undefined;
@@ -230,6 +251,9 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     return new ReadableStream<string>({
       start: async (controller) => {
         reader = makeStream().getReader();
+        if (clearPersistedChunks) {
+          await this.clearPersistedChunks(streamId);
+        }
         let lastOffset = await this.getLastOffset(streamId);
         try {
           while (true) {
@@ -371,6 +395,10 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
       return 0;
     }
     return toNumber(rows[0].last_offset);
+  }
+
+  private async clearPersistedChunks(streamId: string): Promise<void> {
+    await this.options.pool.query(`DELETE FROM ${this.chunkTable} WHERE stream_id = $1`, [streamId]);
   }
 
   async close(): Promise<void> {

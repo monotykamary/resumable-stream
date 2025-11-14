@@ -71,9 +71,9 @@ export interface ResumableStreamContext {
   /**
    * Checks if a stream with the given streamId exists.
    * @param streamId - The ID of the stream.
-   * @returns null if there is no stream with the given streamId. True if a stream with the given streamId exists. "DONE" if the stream is fully done.
+   * @returns null if there is no stream with the given streamId. True if a stream with the given streamId exists. "DONE" if the stream is fully done. "FAILED" (transport-specific) if the last producer crashed but backlog is still persisted.
    */
-  hasExistingStream: (streamId: string) => Promise<null | true | "DONE">;
+  hasExistingStream: (streamId: string) => Promise<null | true | "DONE" | "FAILED">;
 }
 
 /**

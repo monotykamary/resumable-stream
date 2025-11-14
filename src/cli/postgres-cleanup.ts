@@ -1,7 +1,8 @@
+#!/usr/bin/env node
 import { Pool } from "pg";
 
-import { DEFAULT_SESSION_TABLE } from "../src/postgres/schema";
-import { quoteIdentifier } from "../src/postgres/utils";
+import { DEFAULT_SESSION_TABLE } from "../postgres/schema";
+import { quoteIdentifier } from "../postgres/utils";
 
 async function main() {
   const connectionString = process.env.POSTGRES_URL;

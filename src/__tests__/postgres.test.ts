@@ -433,12 +433,12 @@ if (!POSTGRES_URL) {
       await failingWriter.abort(new Error("boom"));
 
       await expect(streamToBuffer(failing)).rejects.toThrow("boom");
-      expect(await localContext.hasExistingStream("boom")).toBe(true);
+      expect(await localContext.hasExistingStream("boom")).toBe("FAILED");
 
       const backlog = await localContext.resumeExistingStream("boom");
       expect(backlog).toBeDefined();
       expect(await streamToBuffer(backlog!)).toEqual("partial\n");
-      expect(await localContext.hasExistingStream("boom")).toBe(true);
+      expect(await localContext.hasExistingStream("boom")).toBe("FAILED");
 
       const { readable, writer } = createTestingStream();
       const recovery = await localContext.resumableStream("boom", () => readable);
@@ -447,6 +447,49 @@ if (!POSTGRES_URL) {
       const recovered = await streamToBuffer(recovery);
       expect(recovered).toEqual("ok\n");
       expect(await localContext.hasExistingStream("boom")).toBe("DONE");
+    });
+
+    it("preserves failed backlog for resumable followers until restart", async () => {
+      const keyPrefix = "postgres-failed-replay-" + crypto.randomUUID();
+      const streamId = "failed-reuse";
+      const namespacedId = `${keyPrefix}:rs:${streamId}`;
+      localContext = createPostgresResumableStreamContext(baseOptions(keyPrefix));
+
+      const { readable: failingReadable, writer: failingWriter } = createTestingStream();
+      const failing = await localContext.resumableStream(streamId, () => failingReadable);
+      failingWriter.write("partial\n");
+      await streamToBuffer(failing, 1);
+      await failingWriter.abort(new Error("boom"));
+      await expect(streamToBuffer(failing)).rejects.toThrow("boom");
+      expect(await localContext.hasExistingStream(streamId)).toBe("FAILED");
+
+      const beforeFollower = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::int AS count FROM ${chunkTable} WHERE stream_id = $1`,
+        [namespacedId]
+      );
+      expect(Number(beforeFollower.rows[0]?.count ?? 0)).toBeGreaterThan(0);
+
+      const follower = await localContext.resumableStream(streamId, () => failingReadable, 0);
+      expect(await streamToBuffer(follower)).toEqual("partial\n");
+
+      const afterFollower = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::int AS count FROM ${chunkTable} WHERE stream_id = $1`,
+        [namespacedId]
+      );
+      expect(afterFollower.rows[0]?.count).toEqual(beforeFollower.rows[0]?.count);
+
+      const { readable: restartReadable, writer: restartWriter } = createTestingStream();
+      const restarted = await localContext.resumableStream(streamId, () => restartReadable);
+      restartWriter.write("fresh\n");
+      restartWriter.close();
+      await streamToBuffer(restarted);
+
+      const afterRestart = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::int AS count FROM ${chunkTable} WHERE stream_id = $1`,
+        [namespacedId]
+      );
+      expect(Number(afterRestart.rows[0]?.count ?? 0)).toBe(1);
+      expect(await localContext.hasExistingStream(streamId)).toBe("DONE");
     });
   });
 
