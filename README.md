@@ -114,6 +114,7 @@ const streamContext = createPostgresResumableStreamContext({
   // listenerPool: new Pool({ connectionString: process.env.POSTGRES_URL! }),
   // keyPrefix and retentionSeconds share the same defaults as the Redis context
   // pollIntervalMs / listenTimeoutMs let you tune LISTEN fallback vs. polling
+  // chunkBatchSize / chunkBatchIntervalMs let you trade latency for throughput
 });
 
 export async function GET(req: NextRequest) {
@@ -145,6 +146,25 @@ If your application never reuses stream IDs after a failure, you can simply star
 
 > `hasExistingStream` uses the uppercase `"FAILED"` sentinel (similar to `"DONE"`) while the database column stores `failed`.
 
+#### Tuning throughput
+
+Chunk writes are buffered so you can trade a small amount of latency for higher throughput:
+
+- `chunkBatchSize` accumulates N chunks before issuing a single multi-row `INSERT` (defaults to `0`, meaning interval-only flushing).
+- `chunkBatchIntervalMs` flushes partial batches after a timeout so slow producers still persist data (defaults to `5ms`).
+- `maxBufferedChunks` caps the in-memory queue before producers start waiting (defaults to 1024 when `chunkBatchSize=0`, or 4× the batch size otherwise).
+
+```ts
+const fastContext = createPostgresResumableStreamContext({
+  pool: new Pool({ connectionString: process.env.POSTGRES_URL! }),
+  chunkBatchSize: 16,
+  chunkBatchIntervalMs: 10,
+  maxBufferedChunks: 128,
+});
+```
+
+With batching enabled the producer issues fewer round trips, and followers still rely on the same persisted backlog.
+
 Before running the Postgres adapter, apply the schema:
 
 ```bash
@@ -170,6 +190,77 @@ To simulate a crash/WAL recovery with Docker, use the helper script (requires th
 
 ```bash
 POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm tsx scripts/postgres-wal-test.ts
+```
+
+### Benchmark
+
+Spin up the included Postgres service via Docker Compose, then run the benchmark to measure chunk throughput under different batching settings:
+
+```bash
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:benchmark
+```
+
+Use environment variables to tweak the scenarios:
+
+- `POSTGRES_BENCH_BATCH_SIZES` (comma separated, defaults to `0,1,16,32` — `0` enables interval-only flushing)
+- `POSTGRES_BENCH_CHUNKS` (defaults to 2000)
+- `POSTGRES_BENCH_CHUNK_LENGTH` (defaults to 128 characters)
+- `POSTGRES_BENCH_INTERVALS_MS` (comma separated, defaults to `5,50,100,150,200,250,300,350,400,450,500`)
+
+The script loops over every batch-size/interval combination, applies the schema, truncates tables, and reports chunks/sec for each run.
+
+Sample metrics (`POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:benchmark`, 2k chunks, 128-char payload):
+
+```sh
+$ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:benchmark
+
+> resumable-stream@2.2.8 postgres:benchmark
+> tsx scripts/postgres-benchmark.ts
+
+Batch size   0 | interval   5ms :: chunks 28169.0/sec (71 ms for 2000) | flush 25.0/sec avg 1000.0 rows (25.74 ms)
+Batch size   0 | interval  50ms :: chunks 31250.0/sec (64 ms for 2000) | flush 29.2/sec avg 1000.0 rows (21.57 ms)
+Batch size   0 | interval 100ms :: chunks 32258.1/sec (62 ms for 2000) | flush 30.3/sec avg 1000.0 rows (19.63 ms)
+Batch size   0 | interval 150ms :: chunks 37735.8/sec (53 ms for 2000) | flush 34.5/sec avg 1000.0 rows (17.59 ms)
+Batch size   0 | interval 200ms :: chunks 32786.9/sec (61 ms for 2000) | flush 30.3/sec avg 1000.0 rows (18.56 ms)
+Batch size   0 | interval 250ms :: chunks 37735.8/sec (53 ms for 2000) | flush 35.2/sec avg 1000.0 rows (15.50 ms)
+Batch size   0 | interval 300ms :: chunks 40816.3/sec (49 ms for 2000) | flush 37.7/sec avg 1000.0 rows (16.06 ms)
+Batch size   0 | interval 350ms :: chunks 38461.5/sec (52 ms for 2000) | flush 35.4/sec avg 1000.0 rows (16.20 ms)
+Batch size   0 | interval 400ms :: chunks 41666.7/sec (48 ms for 2000) | flush 37.5/sec avg 1000.0 rows (15.06 ms)
+Batch size   0 | interval 450ms :: chunks 45454.5/sec (44 ms for 2000) | flush 42.0/sec avg 1000.0 rows (14.69 ms)
+Batch size   0 | interval 500ms :: chunks 48780.5/sec (41 ms for 2000) | flush 45.1/sec avg 1000.0 rows (12.39 ms)
+Batch size   1 | interval   5ms :: chunks 293.9/sec (6806 ms for 2000) | flush 293.7/sec avg 1.0 rows (1.57 ms)
+Batch size   1 | interval  50ms :: chunks 453.1/sec (4414 ms for 2000) | flush 452.9/sec avg 1.0 rows (1.01 ms)
+Batch size   1 | interval 100ms :: chunks 466.3/sec (4289 ms for 2000) | flush 466.1/sec avg 1.0 rows (0.97 ms)
+Batch size   1 | interval 150ms :: chunks 458.2/sec (4365 ms for 2000) | flush 458.1/sec avg 1.0 rows (1.00 ms)
+Batch size   1 | interval 200ms :: chunks 468.7/sec (4267 ms for 2000) | flush 468.5/sec avg 1.0 rows (0.99 ms)
+Batch size   1 | interval 250ms :: chunks 452.4/sec (4421 ms for 2000) | flush 452.2/sec avg 1.0 rows (1.02 ms)
+Batch size   1 | interval 300ms :: chunks 467.9/sec (4274 ms for 2000) | flush 467.7/sec avg 1.0 rows (0.98 ms)
+Batch size   1 | interval 350ms :: chunks 483.0/sec (4141 ms for 2000) | flush 482.9/sec avg 1.0 rows (0.95 ms)
+Batch size   1 | interval 400ms :: chunks 297.9/sec (6714 ms for 2000) | flush 297.8/sec avg 1.0 rows (1.57 ms)
+Batch size   1 | interval 450ms :: chunks 481.7/sec (4152 ms for 2000) | flush 481.6/sec avg 1.0 rows (0.95 ms)
+Batch size   1 | interval 500ms :: chunks 483.3/sec (4138 ms for 2000) | flush 483.1/sec avg 1.0 rows (0.95 ms)
+Batch size  16 | interval   5ms :: chunks 6802.7/sec (294 ms for 2000) | flush 421.4/sec avg 16.0 rows (1.19 ms)
+Batch size  16 | interval  50ms :: chunks 6944.4/sec (288 ms for 2000) | flush 431.8/sec avg 16.0 rows (1.13 ms)
+Batch size  16 | interval 100ms :: chunks 6872.9/sec (291 ms for 2000) | flush 426.3/sec avg 16.0 rows (1.15 ms)
+Batch size  16 | interval 150ms :: chunks 6825.9/sec (293 ms for 2000) | flush 424.3/sec avg 16.0 rows (1.18 ms)
+Batch size  16 | interval 200ms :: chunks 6944.4/sec (288 ms for 2000) | flush 432.2/sec avg 16.0 rows (1.15 ms)
+Batch size  16 | interval 250ms :: chunks 6849.3/sec (292 ms for 2000) | flush 425.2/sec avg 16.0 rows (1.15 ms)
+Batch size  16 | interval 300ms :: chunks 7168.5/sec (279 ms for 2000) | flush 446.7/sec avg 16.0 rows (1.11 ms)
+Batch size  16 | interval 350ms :: chunks 6779.7/sec (295 ms for 2000) | flush 421.3/sec avg 16.0 rows (1.15 ms)
+Batch size  16 | interval 400ms :: chunks 6802.7/sec (294 ms for 2000) | flush 422.3/sec avg 16.0 rows (1.16 ms)
+Batch size  16 | interval 450ms :: chunks 6993.0/sec (286 ms for 2000) | flush 435.0/sec avg 16.0 rows (1.13 ms)
+Batch size  16 | interval 500ms :: chunks 6622.5/sec (302 ms for 2000) | flush 412.3/sec avg 16.0 rows (1.20 ms)
+Batch size  32 | interval   5ms :: chunks 12195.1/sec (164 ms for 2000) | flush 382.0/sec avg 31.7 rows (1.34 ms)
+Batch size  32 | interval  50ms :: chunks 12422.4/sec (161 ms for 2000) | flush 387.3/sec avg 31.7 rows (1.34 ms)
+Batch size  32 | interval 100ms :: chunks 11049.7/sec (181 ms for 2000) | flush 346.0/sec avg 31.7 rows (1.49 ms)
+Batch size  32 | interval 150ms :: chunks 10582.0/sec (189 ms for 2000) | flush 330.9/sec avg 31.7 rows (1.56 ms)
+Batch size  32 | interval 200ms :: chunks 9615.4/sec (208 ms for 2000) | flush 298.7/sec avg 31.7 rows (1.73 ms)
+Batch size  32 | interval 250ms :: chunks 9132.4/sec (219 ms for 2000) | flush 283.8/sec avg 31.7 rows (1.85 ms)
+Batch size  32 | interval 300ms :: chunks 9434.0/sec (212 ms for 2000) | flush 294.2/sec avg 31.7 rows (1.79 ms)
+Batch size  32 | interval 350ms :: chunks 7168.5/sec (279 ms for 2000) | flush 223.9/sec avg 31.7 rows (2.37 ms)
+Batch size  32 | interval 400ms :: chunks 3571.4/sec (560 ms for 2000) | flush 112.0/sec avg 31.7 rows (4.73 ms)
+Batch size  32 | interval 450ms :: chunks 5618.0/sec (356 ms for 2000) | flush 175.3/sec avg 31.7 rows (3.02 ms)
+Batch size  32 | interval 500ms :: chunks 4376.4/sec (457 ms for 2000) | flush 136.6/sec avg 31.7 rows (3.95 ms)
 ```
 
 When a producer crashes mid-stream, the Postgres transport marks the session as `failed` and keeps the persisted backlog available for reconnecting followers. The next successful producer call automatically resets the session and starts a fresh stream.

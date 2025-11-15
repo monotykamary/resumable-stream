@@ -46,7 +46,8 @@
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "docs": "rimraf docs && pnpm typedoc",
     "postgres:setup": "tsx src/cli/postgres-setup.ts",
-    "postgres:cleanup": "tsx src/cli/postgres-cleanup.ts"
+    "postgres:cleanup": "tsx src/cli/postgres-cleanup.ts",
+    "postgres:benchmark": "tsx scripts/postgres-benchmark.ts"
   },
   "bin": {
     "resumable-stream-postgres-setup": "./dist/cli/postgres-setup.js",

@@ -57,6 +57,21 @@ export interface CreatePostgresResumableStreamContextOptions
    * Defaults to 50ms.
    */
   pollIntervalMs?: number;
+  /**
+   * Number of chunks to accumulate before persisting them in a single INSERT.
+   * Defaults to 0 (interval-only). Set to a positive number to flush immediately once that many chunks are buffered.
+   */
+  chunkBatchSize?: number;
+  /**
+   * How long to wait (in milliseconds) before flushing a partial batch.
+   * Defaults to 5ms.
+   */
+  chunkBatchIntervalMs?: number;
+  /**
+   * Maximum number of chunks allowed in memory before producer writes backpressure the flush.
+   * Defaults to 1024 (or 4x the batch size, whichever is larger).
+   */
+  maxBufferedChunks?: number;
 }
 
 export type PostgresStreamStatus = "pending" | "streaming" | "done" | "failed";

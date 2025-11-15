@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 
 import { resumableStreamTests } from "./tests";
@@ -264,6 +264,104 @@ if (!POSTGRES_URL) {
       ]);
       expect(producerResult).toEqual(followerResult);
       expect(followerResult.split("\n").filter(Boolean).length).toBe(200);
+    });
+
+    it("batches chunk inserts when configured", async () => {
+      const keyPrefix = "postgres-batching-" + crypto.randomUUID();
+      const chunkBatchSize = 5;
+      const insertStatements: string[] = [];
+      const originalQuery = pool.query.bind(pool);
+      const querySpy = vi.spyOn(pool, "query").mockImplementation(async (...args) => {
+        const [text] = args;
+        if (typeof text === "string" && text.includes(`INSERT INTO ${chunkTable}`)) {
+          insertStatements.push(text);
+        }
+        return originalQuery(...(args as Parameters<typeof originalQuery>));
+      });
+
+      try {
+        localContext = createPostgresResumableStreamContext({
+          ...baseOptions(keyPrefix),
+          chunkBatchSize,
+          chunkBatchIntervalMs: 1,
+        });
+        const { readable, writer } = createTestingStream();
+        const producer = await localContext.resumableStream("batch", () => readable);
+        for (let i = 0; i < 12; i++) {
+          writer.write(`chunk-${i}\n`);
+        }
+        writer.close();
+        await streamToBuffer(producer);
+      } finally {
+        querySpy.mockRestore();
+      }
+
+      expect(insertStatements.length).toBeLessThanOrEqual(Math.ceil(12 / chunkBatchSize));
+      expect(insertStatements.some((sql) => sql.includes("),"))).toBe(true);
+    });
+
+    it("flushes remaining chunks when stream ends before filling a batch", async () => {
+      const keyPrefix = "postgres-partial-batch-" + crypto.randomUUID();
+      const streamKey = `${keyPrefix}:rs:partial`;
+      localContext = createPostgresResumableStreamContext({
+        ...baseOptions(keyPrefix),
+        chunkBatchSize: 32,
+        chunkBatchIntervalMs: 1000,
+      });
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("partial", () => readable);
+      for (let i = 0; i < 7; i++) {
+        writer.write(`tail-${i}\n`);
+      }
+      writer.close();
+      await streamToBuffer(producer);
+      const count = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::int AS count FROM ${chunkTable} WHERE stream_id = $1`,
+        [streamKey]
+      );
+      expect(Number(count.rows[0]?.count ?? 0)).toBe(7);
+    });
+
+    it("flushes via the batch interval for slow producers", async () => {
+      const keyPrefix = "postgres-batch-interval-" + crypto.randomUUID();
+      const streamKey = `${keyPrefix}:rs:slow`;
+      localContext = createPostgresResumableStreamContext({
+        ...baseOptions(keyPrefix),
+        chunkBatchSize: 64,
+        chunkBatchIntervalMs: 10,
+      });
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("slow", () => readable);
+      writer.write("hello\n");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const count = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::int AS count FROM ${chunkTable} WHERE stream_id = $1`,
+        [streamKey]
+      );
+      expect(Number(count.rows[0]?.count ?? 0)).toBe(1);
+      writer.close();
+      await streamToBuffer(producer);
+    });
+
+    it("supports interval-only flushing when chunkBatchSize is zero", async () => {
+      const keyPrefix = "postgres-interval-only-" + crypto.randomUUID();
+      const streamKey = `${keyPrefix}:rs:interval`;
+      localContext = createPostgresResumableStreamContext({
+        ...baseOptions(keyPrefix),
+        chunkBatchSize: 0,
+        chunkBatchIntervalMs: 20,
+      });
+      const { readable, writer } = createTestingStream();
+      const producer = await localContext.resumableStream("interval", () => readable);
+      writer.write("first\n");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const count = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::int AS count FROM ${chunkTable} WHERE stream_id = $1`,
+        [streamKey]
+      );
+      expect(Number(count.rows[0]?.count ?? 0)).toBe(1);
+      writer.close();
+      await streamToBuffer(producer);
     });
 
     it("runs makeStream once even with simultaneous producer calls", async () => {

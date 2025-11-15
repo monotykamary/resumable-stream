@@ -10,11 +10,15 @@ import {
   LISTEN_CHANNEL_SUFFIX,
 } from "./postgres/schema";
 import { PostgresNotifier } from "./postgres/notifier";
+import { ChunkBatchWriter } from "./postgres/chunk-batch-writer";
 import { delay, quoteIdentifier, sanitizeChannelName, toNumber } from "./postgres/utils";
 
 const DEFAULT_RETENTION_SECONDS = 24 * 60 * 60;
 const DEFAULT_POLL_INTERVAL_MS = 50;
 const DEFAULT_LISTEN_TIMEOUT_MS = 500;
+const DEFAULT_CHUNK_BATCH_SIZE = 0;
+const DEFAULT_CHUNK_BATCH_INTERVAL_MS = 5;
+const DEFAULT_MAX_BUFFERED_CHUNKS = 1024;
 
 type InternalPostgresOptions = {
   pool: PostgresPoolLike;
@@ -26,6 +30,9 @@ type InternalPostgresOptions = {
   keyPrefix: string;
   pollIntervalMs: number;
   listenTimeoutMs: number;
+  chunkBatchSize: number;
+  chunkBatchIntervalMs: number;
+  maxBufferedChunks: number;
 };
 
 type ChunkRow = {
@@ -40,6 +47,24 @@ export function createPostgresResumableStreamContext(
 ): ResumableStreamContext & { close: () => Promise<void> } {
   const waitUntil = options.waitUntil || (async (p) => await p);
   const keyPrefix = `${options.keyPrefix || "resumable-stream"}:rs`;
+  const rawBatchSize = options.chunkBatchSize ?? DEFAULT_CHUNK_BATCH_SIZE;
+  const normalizedBatchSize =
+    !Number.isFinite(rawBatchSize) || rawBatchSize <= 0
+      ? Number.POSITIVE_INFINITY
+      : Math.max(1, Math.floor(rawBatchSize));
+  const chunkBatchIntervalMs = Math.max(
+    1,
+    options.chunkBatchIntervalMs ?? DEFAULT_CHUNK_BATCH_INTERVAL_MS
+  );
+  const computedMaxBuffer =
+    options.maxBufferedChunks !== undefined
+      ? Math.max(1, Math.floor(options.maxBufferedChunks))
+      : Math.max(
+          DEFAULT_MAX_BUFFERED_CHUNKS,
+          Number.isFinite(normalizedBatchSize) && normalizedBatchSize > 0
+            ? normalizedBatchSize * 4
+            : DEFAULT_MAX_BUFFERED_CHUNKS
+        );
   const internalOptions: InternalPostgresOptions = {
     pool: options.pool,
     listenerPool: options.listenerPool,
@@ -50,6 +75,9 @@ export function createPostgresResumableStreamContext(
     keyPrefix,
     pollIntervalMs: Math.max(5, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS),
     listenTimeoutMs: Math.max(50, options.listenTimeoutMs ?? DEFAULT_LISTEN_TIMEOUT_MS),
+    chunkBatchSize: normalizedBatchSize,
+    chunkBatchIntervalMs,
+    maxBufferedChunks: computedMaxBuffer,
   };
 
   return new PostgresResumableStreamContext(internalOptions);
@@ -214,27 +242,6 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     );
   }
 
-  private async persistChunk(
-    streamId: string,
-    chunk: string,
-    startOffset: number
-  ): Promise<{ seq: number; endOffset: number }> {
-    const endOffset = startOffset + chunk.length;
-    const insertResult = await this.options.pool.query<{ seq: number | string }>(
-      `INSERT INTO ${this.chunkTable} (stream_id, start_offset, end_offset, chunk)
-       VALUES ($1, $2, $3, $4)
-       RETURNING seq`,
-      [streamId, startOffset, endOffset, chunk]
-    );
-    await this.options.pool.query(
-      `UPDATE ${this.sessionTable}
-       SET last_offset = $2, updated_at = NOW(), expires_at = NOW() + INTERVAL '${this.retentionIntervalLiteral}'
-       WHERE stream_id = $1`,
-      [streamId, endOffset]
-    );
-    return { seq: toNumber(insertResult.rows[0].seq), endOffset };
-  }
-
   private createProducerStream(
     streamId: string,
     makeStream: () => ReadableStream<string>,
@@ -254,11 +261,24 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
         if (clearPersistedChunks) {
           await this.clearPersistedChunks(streamId);
         }
-        let lastOffset = await this.getLastOffset(streamId);
+        const initialOffset = await this.getLastOffset(streamId);
+        const chunkWriter = new ChunkBatchWriter({
+          streamId,
+          pool: this.options.pool,
+          notifier: this.notifier,
+          chunkTable: this.chunkTable,
+          sessionTable: this.sessionTable,
+          retentionIntervalLiteral: this.retentionIntervalLiteral,
+          batchSize: this.options.chunkBatchSize,
+          batchIntervalMs: this.options.chunkBatchIntervalMs,
+          maxBufferedChunks: this.options.maxBufferedChunks,
+          initialOffset,
+        });
         try {
           while (true) {
             const { done, value } = await reader.read();
             if (done) {
+              await chunkWriter.close();
               await this.markStreamDone(streamId);
               try {
                 await this.notifier.notify({ streamId, event: "done" });
@@ -286,15 +306,10 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
                 controllerClosed = true;
               }
             }
-            const { seq, endOffset } = await this.persistChunk(streamId, value, lastOffset);
-            lastOffset = endOffset;
-            try {
-              await this.notifier.notify({ streamId, event: "chunk", seq });
-            } catch {
-              // swallow notifier errors; polling path will pick up the chunk
-            }
+            await chunkWriter.append(value);
           }
         } catch (error) {
+          await chunkWriter.close({ suppressErrors: true });
           await this.handleProducerFailure(streamId);
           if (!controllerClosed) {
             try {
