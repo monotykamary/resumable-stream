@@ -273,7 +273,7 @@ if (!POSTGRES_URL) {
       const originalQuery = pool.query.bind(pool);
       const querySpy = vi.spyOn(pool, "query").mockImplementation(async (...args) => {
         const [text] = args;
-        if (typeof text === "string" && text.includes(`INSERT INTO ${chunkTable}`)) {
+        if (typeof text === "string" && text.includes(`WITH inserted AS`)) {
           insertStatements.push(text);
         }
         return originalQuery(...(args as Parameters<typeof originalQuery>));
@@ -297,7 +297,7 @@ if (!POSTGRES_URL) {
       }
 
       expect(insertStatements.length).toBeLessThanOrEqual(Math.ceil(12 / chunkBatchSize));
-      expect(insertStatements.some((sql) => sql.includes("),"))).toBe(true);
+      expect(insertStatements.some((sql) => sql.includes("UPDATE"))).toBe(true);
     });
 
     it("flushes remaining chunks when stream ends before filling a batch", async () => {

@@ -136,22 +136,28 @@ export class ChunkBatchWriter {
       valueFragments.push(`($${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`);
       params.push(this.options.streamId, item.startOffset, item.endOffset, item.chunk);
     }
-    const insertSql = `INSERT INTO ${this.options.chunkTable} (stream_id, start_offset, end_offset, chunk)
-                       VALUES ${valueFragments.join(", ")}
-                       RETURNING seq`;
-    const insertResult = await this.options.pool.query<{ seq: number | string }>(insertSql, params);
-    let latestSeq: number | null = null;
-    if (insertResult.rows.length) {
-      latestSeq = toNumber(insertResult.rows[insertResult.rows.length - 1].seq);
-    }
 
     const lastOffset = batch[batch.length - 1].endOffset;
-    await this.options.pool.query(
-      `UPDATE ${this.options.sessionTable}
-       SET last_offset = $2, updated_at = NOW(), expires_at = NOW() + INTERVAL '${this.options.retentionIntervalLiteral}'
-       WHERE stream_id = $1`,
-      [this.options.streamId, lastOffset]
-    );
+    params.push(lastOffset);
+    const offsetParamIndex = paramIndex;
+
+    const sql = `
+      WITH inserted AS (
+        INSERT INTO ${this.options.chunkTable} (stream_id, start_offset, end_offset, chunk)
+        VALUES ${valueFragments.join(", ")}
+        RETURNING seq
+      )
+      UPDATE ${this.options.sessionTable}
+      SET last_offset = $${offsetParamIndex}, updated_at = NOW(), expires_at = NOW() + INTERVAL '${this.options.retentionIntervalLiteral}'
+      WHERE stream_id = $1
+      RETURNING (SELECT MAX(seq) FROM inserted) as seq
+    `;
+
+    const result = await this.options.pool.query<{ seq: number | string }>(sql, params);
+    let latestSeq: number | null = null;
+    if (result.rows.length && result.rows[0].seq != null) {
+      latestSeq = toNumber(result.rows[0].seq);
+    }
 
     if (latestSeq !== null) {
       try {
