@@ -5,13 +5,13 @@
     "rootDir": "src",
     "declaration": true,
     "sourceMap": true,
-    "noEmit": false,
-    "preserveShebangs": true
+    "noEmit": false
   },
   "include": [
     "src/index.ts",
     "src/ioredis.ts",
     "src/redis.ts",
+    "src/postgres.ts",
     "src/cli/postgres-setup.ts",
     "src/cli/postgres-cleanup.ts"
   ],

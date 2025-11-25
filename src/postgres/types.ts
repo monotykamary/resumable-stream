@@ -11,7 +11,9 @@ export interface PostgresQueryable {
 export interface PostgresClientLike extends PostgresQueryable {
   release(): void | Promise<void>;
   on?(event: "notification", listener: (payload: PostgresNotification) => void): void;
+  on?(event: "error", listener: (error: Error) => void): void;
   off?(event: "notification", listener: (payload: PostgresNotification) => void): void;
+  off?(event: "error", listener: (error: Error) => void): void;
 }
 
 export interface PostgresPoolLike extends PostgresQueryable {

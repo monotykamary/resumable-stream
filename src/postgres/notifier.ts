@@ -72,14 +72,15 @@ export class PostgresNotifier {
   }
 
   private async ensureClient(): Promise<PostgresClientLike | null> {
-    if (!this.pool || !this.channelName || !this.quotedChannel) {
+    const pool = this.pool;
+    if (!pool || !this.channelName || !this.quotedChannel) {
       return null;
     }
     if (!this.clientPromise) {
       this.clientPromise = (async () => {
         let client: PostgresClientLike | null = null;
         try {
-          client = await this.pool.connect();
+          client = await pool.connect();
           if (!client.on) {
             await client.release();
             return null;
@@ -102,6 +103,9 @@ export class PostgresNotifier {
             }
           };
           client.on("notification", this.notificationHandler);
+          client.on("error", () => {
+            this.clientPromise = undefined;
+          });
           await client.query(`LISTEN ${this.quotedChannel}`);
           return client;
         } catch (error) {
