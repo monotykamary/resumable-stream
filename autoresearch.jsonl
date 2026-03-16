@@ -1,0 +1,1 @@
+{"run":1,"commit":"136f352","metric":4.33,"metrics":{},"status":"keep","description":"Baseline: Average SELECT/INSERT ratio is 4.33:1. Multiple followers (8:1 ratio) and fast polling scenarios show worst case. Target is <2:1.","timestamp":1773657835739,"segment":0}
