@@ -9,7 +9,7 @@ import {
   DEFAULT_SESSION_TABLE,
   LISTEN_CHANNEL_SUFFIX,
 } from "./postgres/schema";
-import { PostgresNotifier } from "./postgres/notifier";
+import { NotifierPayload, PostgresNotifier } from "./postgres/notifier";
 import { ChunkBatchWriter } from "./postgres/chunk-batch-writer";
 import { delay, quoteIdentifier, sanitizeChannelName, toNumber } from "./postgres/utils";
 
@@ -334,8 +334,16 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     const consume = async (controller: ReadableStreamDefaultController<string>) => {
       let lastSeq = 0;
       let remainingSkip = skipCharacters;
+      let isFirstIteration = true;
       try {
         while (!cancelled) {
+          // On first iteration, add stagger delay to prevent thundering herd
+          // when multiple followers start simultaneously.
+          if (isFirstIteration) {
+            await delay(Math.random() * 20);
+            isFirstIteration = false;
+          }
+
           const chunks = await this.fetchChunks(streamId, lastSeq);
           let emitted = false;
           for (const chunk of chunks) {
@@ -356,7 +364,23 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
 
           // Always wait for more data after processing, whether we emitted or not.
           // This prevents busy-waiting and ensures we use notifications instead of polling.
-          await this.waitForMore(streamId);
+          // Use a longer staggered delay when we received data (more batches expected),
+          // and a shorter delay when waiting for new data.
+          const notification = await this.waitForNotification(streamId, emitted ? 25 : 10);
+          if (notification?.event === "done") {
+            // Stream is done, close after checking for any final chunks.
+            // This avoids an extra empty SELECT query.
+            const finalChunks = await this.fetchChunks(streamId, lastSeq);
+            for (const chunk of finalChunks) {
+              const { text, nextSkip } = sliceChunk(chunk, remainingSkip);
+              remainingSkip = nextSkip;
+              if (text) {
+                controller.enqueue(text);
+              }
+            }
+            controller.close();
+            return;
+          }
         }
       } catch (error) {
         controller.error(error);
@@ -394,17 +418,18 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
     }));
   }
 
-  private async waitForMore(streamId: string): Promise<void> {
+  private async waitForNotification(streamId: string, maxStaggerMs = 10): Promise<import("./postgres/notifier").NotifierPayload | null> {
     const payload = await this.notifier.waitFor(streamId);
     if (!payload) {
       // Polling fallback: wait for the configured poll interval
       await delay(this.options.pollIntervalMs);
     } else {
-      // Notification received: add a small staggered delay to reduce
+      // Notification received: add a staggered delay to reduce
       // thundering herd when multiple followers are waiting.
-      // This spreads queries over ~5ms to reduce database contention.
-      await delay(Math.random() * 5);
+      // Delay scales based on maxStaggerMs (default 5-15ms, or 10-30ms when data was received).
+      await delay(5 + Math.random() * maxStaggerMs);
     }
+    return payload;
   }
 
   private async getLastOffset(streamId: string): Promise<number> {
