@@ -397,7 +397,13 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
   private async waitForMore(streamId: string): Promise<void> {
     const payload = await this.notifier.waitFor(streamId);
     if (!payload) {
+      // Polling fallback: wait for the configured poll interval
       await delay(this.options.pollIntervalMs);
+    } else {
+      // Notification received: add a small staggered delay to reduce
+      // thundering herd when multiple followers are waiting.
+      // This spreads queries over ~5ms to reduce database contention.
+      await delay(Math.random() * 5);
     }
   }
 
