@@ -24,6 +24,7 @@ type BenchmarkConfig = {
 
 type QueryMetrics = {
   selectCount: number;
+  selectEmptyCount: number; // SELECTs that returned 0 rows
   insertCount: number;
   selectDurationMs: number;
   insertDurationMs: number;
@@ -37,6 +38,7 @@ type BenchmarkResult = {
   selectRate: number; // calls/sec
   insertRate: number; // calls/sec
   ratio: number; // select/insert
+  emptySelectRate: number; // empty SELECTs / total SELECTs
   durationSeconds: number;
 };
 
@@ -44,6 +46,7 @@ function instrumentPool(pool: Pool, chunkTable: string): { metrics: QueryMetrics
   const originalQuery = pool.query.bind(pool);
   const metrics: QueryMetrics = {
     selectCount: 0,
+    selectEmptyCount: 0,
     insertCount: 0,
     selectDurationMs: 0,
     insertDurationMs: 0,
@@ -66,6 +69,10 @@ function instrumentPool(pool: Pool, chunkTable: string): { metrics: QueryMetrics
     if (sql.includes(selectPattern) && sql.includes("SELECT")) {
       metrics.selectCount++;
       metrics.selectDurationMs += duration;
+      // Check if this SELECT returned empty results (wasted query)
+      if (result?.rows?.length === 0) {
+        metrics.selectEmptyCount++;
+      }
     } else if (sql.includes(insertPattern)) {
       metrics.insertCount++;
       metrics.insertDurationMs += duration;
@@ -143,6 +150,7 @@ async function runBenchmark(
   const selectRate = durationSeconds > 0 ? metrics.selectCount / durationSeconds : 0;
   const insertRate = durationSeconds > 0 ? metrics.insertCount / durationSeconds : 0;
   const ratio = insertRate > 0 ? selectRate / insertRate : 0;
+  const emptySelectRate = metrics.selectCount > 0 ? metrics.selectEmptyCount / metrics.selectCount : 0;
 
   return {
     config,
@@ -150,6 +158,7 @@ async function runBenchmark(
     selectRate,
     insertRate,
     ratio,
+    emptySelectRate,
     durationSeconds,
   };
 }
@@ -164,9 +173,10 @@ async function drainStream(stream: ReadableStream<string>): Promise<void> {
 
 function formatResult(result: BenchmarkResult): string {
   const c = result.config;
+  const emptyPct = (result.emptySelectRate * 100).toFixed(0);
   return [
     `chunks=${c.chunkCount} followers=${c.followerCount} poll=${c.pollIntervalMs}ms batchSize=${c.chunkBatchSize}`,
-    `  SELECT: ${result.metrics.selectCount} calls (${result.selectRate.toFixed(1)}/sec)`,
+    `  SELECT: ${result.metrics.selectCount} calls (${result.selectRate.toFixed(1)}/sec), ${result.metrics.selectEmptyCount} empty (${emptyPct}%)`,
     `  INSERT: ${result.metrics.insertCount} calls (${result.insertRate.toFixed(1)}/sec)`,
     `  RATIO: ${result.ratio.toFixed(2)}:1 (lower is better)`,
     `  Duration: ${result.durationSeconds.toFixed(2)}s`,
@@ -243,10 +253,12 @@ async function main() {
         selectRate: r.selectRate,
         insertRate: r.insertRate,
         ratio: r.ratio,
+        emptySelectRate: r.emptySelectRate,
         durationSeconds: r.durationSeconds,
       })),
       summary: {
         averageRatio: avgRatio,
+        avgEmptySelectRate: results.reduce((sum, r) => sum + r.emptySelectRate, 0) / results.length,
       },
     };
 

@@ -354,13 +354,9 @@ class PostgresResumableStreamContext implements ResumableStreamContext {
             return;
           }
 
-          if (!emitted) {
-            await this.waitForMore(streamId);
-          } else {
-            // After emitting chunks, yield to prevent tight polling loop.
-            // This reduces the SELECT query rate while maintaining low latency.
-            await delay(0);
-          }
+          // Always wait for more data after processing, whether we emitted or not.
+          // This prevents busy-waiting and ensures we use notifications instead of polling.
+          await this.waitForMore(streamId);
         }
       } catch (error) {
         controller.error(error);
