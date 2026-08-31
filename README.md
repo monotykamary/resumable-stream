@@ -182,14 +182,14 @@ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream npx re
 Run the Postgres-focused tests (or the entire suite) with the same environment variable:
 
 ```bash
-POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm vitest run src/__tests__/postgres.test.ts
-POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm vitest run
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream bun x vitest run src/__tests__/postgres.test.ts
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream bun x vitest run
 ```
 
 To simulate a crash/WAL recovery with Docker, use the helper script (requires the compose setup above):
 
 ```bash
-POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm tsx scripts/postgres-wal-test.ts
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream bun run tsx scripts/postgres-wal-test.ts
 ```
 
 ### Benchmark
@@ -197,7 +197,7 @@ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm t
 Spin up the included Postgres service via Docker Compose, then run the benchmark to measure chunk throughput under different batching settings:
 
 ```bash
-POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:benchmark
+POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream bun run postgres:benchmark
 ```
 
 Use environment variables to tweak the scenarios:
@@ -209,10 +209,10 @@ Use environment variables to tweak the scenarios:
 
 The script loops over every batch-size/interval combination, applies the schema, truncates tables, and reports chunks/sec for each run.
 
-Sample metrics (`POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:benchmark`, 2k chunks, 128-char payload):
+Sample metrics (`POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream bun run postgres:benchmark`, 2k chunks, 128-char payload):
 
 ```sh
-$ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream pnpm postgres:benchmark
+$ POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5545/resumable_stream bun run postgres:benchmark
 
 > resumable-stream@2.2.8 postgres:benchmark
 > tsx scripts/postgres-benchmark.ts

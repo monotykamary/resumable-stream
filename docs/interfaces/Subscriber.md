@@ -10,7 +10,7 @@ A Redis-like subscriber. Designed to be compatible with clients from both the `r
 
 ## Properties
 
-### connect()
+### connect
 
 > **connect**: () => `Promise`\<`unknown`\>
 
@@ -20,7 +20,7 @@ A Redis-like subscriber. Designed to be compatible with clients from both the `r
 
 ***
 
-### subscribe()
+### subscribe
 
 > **subscribe**: (`channel`, `callback`) => `Promise`\<`number` \| `void`\>
 
@@ -40,7 +40,7 @@ A Redis-like subscriber. Designed to be compatible with clients from both the `r
 
 ***
 
-### unsubscribe()
+### unsubscribe
 
 > **unsubscribe**: (`channel`) => `Promise`\<`unknown`\>
 

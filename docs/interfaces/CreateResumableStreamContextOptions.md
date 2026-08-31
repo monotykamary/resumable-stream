@@ -10,7 +10,7 @@
 
 ### keyPrefix?
 
-> `optional` **keyPrefix**: `string`
+> `optional` **keyPrefix?**: `string`
 
 The prefix for the keys used by the resumable streams. Defaults to `resumable-stream`.
 
@@ -18,7 +18,7 @@ The prefix for the keys used by the resumable streams. Defaults to `resumable-st
 
 ### publisher?
 
-> `optional` **publisher**: `Redis` \| [`Publisher`](Publisher.md)
+> `optional` **publisher?**: `Redis` \| [`Publisher`](Publisher.md)
 
 A pubsub publisher. Designed to be compatible with clients from the `redis` package.
 
@@ -26,7 +26,7 @@ A pubsub publisher. Designed to be compatible with clients from the `redis` pack
 
 ### subscriber?
 
-> `optional` **subscriber**: [`Subscriber`](Subscriber.md) \| `Redis`
+> `optional` **subscriber?**: [`Subscriber`](Subscriber.md) \| `Redis`
 
 A pubsub subscriber. Designed to be compatible with clients from the `redis` package.
 
@@ -34,7 +34,7 @@ A pubsub subscriber. Designed to be compatible with clients from the `redis` pac
 
 ### waitUntil
 
-> **waitUntil**: `null` \| (`promise`) => `void`
+> **waitUntil**: ((`promise`) => `void`) \| `null`
 
 A function that takes a promise and ensures that the current program stays alive
 until the promise is resolved.

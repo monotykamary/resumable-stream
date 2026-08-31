@@ -8,9 +8,9 @@
 
 ## Properties
 
-### createNewResumableStream()
+### createNewResumableStream
 
-> **createNewResumableStream**: (`streamId`, `makeStream`, `skipCharacters?`) => `Promise`\<`null` \| `ReadableStream`\<`string`\>\>
+> **createNewResumableStream**: (`streamId`, `makeStream`, `skipCharacters?`) => `Promise`\<`ReadableStream`\<`string`\> \| `null`\>
 
 Creates a new resumable stream.
 
@@ -36,15 +36,15 @@ Number of characters to skip
 
 #### Returns
 
-`Promise`\<`null` \| `ReadableStream`\<`string`\>\>
+`Promise`\<`ReadableStream`\<`string`\> \| `null`\>
 
 A readable stream of strings. Returns null if there was a stream with the given streamId but it is already fully done (Defaults to 24 hour expiration)
 
 ***
 
-### hasExistingStream()
+### hasExistingStream
 
-> **hasExistingStream**: (`streamId`) => `Promise`\<`null` \| `true` \| `"DONE"` \| `"FAILED"`\>
+> **hasExistingStream**: (`streamId`) => `Promise`\<`true` \| `"DONE"` \| `"FAILED"` \| `null`\>
 
 Checks if a stream with the given streamId exists.
 
@@ -58,17 +58,15 @@ The ID of the stream.
 
 #### Returns
 
-`Promise`\<`null` \| `true` \| `"DONE"` \| `"FAILED"`\>
+`Promise`\<`true` \| `"DONE"` \| `"FAILED"` \| `null`\>
 
-null if there is no stream with the given streamId. True if a stream with the given streamId exists.
-"DONE" if the stream is fully done. "FAILED" (transport-specific) if the last producer crashed but chunk
-history is still persisted.
+null if there is no stream with the given streamId. True if a stream with the given streamId exists. "DONE" if the stream is fully done. "FAILED" (transport-specific) if the last producer crashed but backlog is still persisted.
 
 ***
 
-### resumableStream()
+### resumableStream
 
-> **resumableStream**: (`streamId`, `makeStream`, `skipCharacters?`) => `Promise`\<`null` \| `ReadableStream`\<`string`\>\>
+> **resumableStream**: (`streamId`, `makeStream`, `skipCharacters?`) => `Promise`\<`ReadableStream`\<`string`\> \| `null`\>
 
 Creates or resumes a resumable stream.
 
@@ -99,15 +97,15 @@ Number of characters to skip
 
 #### Returns
 
-`Promise`\<`null` \| `ReadableStream`\<`string`\>\>
+`Promise`\<`ReadableStream`\<`string`\> \| `null`\>
 
 A readable stream of strings. Returns null if there was a stream with the given streamId but it is already fully done (Defaults to 24 hour expiration)
 
 ***
 
-### resumeExistingStream()
+### resumeExistingStream
 
-> **resumeExistingStream**: (`streamId`, `skipCharacters?`) => `Promise`\<`undefined` \| `null` \| `ReadableStream`\<`string`\>\>
+> **resumeExistingStream**: (`streamId`, `skipCharacters?`) => `Promise`\<`ReadableStream`\<`string`\> \| `null` \| `undefined`\>
 
 Resumes a stream that was previously created by `createNewResumableStream`.
 
@@ -127,6 +125,6 @@ Number of characters to skip
 
 #### Returns
 
-`Promise`\<`undefined` \| `null` \| `ReadableStream`\<`string`\>\>
+`Promise`\<`ReadableStream`\<`string`\> \| `null` \| `undefined`\>
 
 A readable stream of strings. Returns null if there was a stream with the given streamId but it is already fully done (Defaults to 24 hour expiration). undefined if there is no stream with the given streamId.

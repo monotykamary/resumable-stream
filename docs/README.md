@@ -21,4 +21,5 @@
 
 ## Functions
 
+- [createPostgresResumableStreamContext](functions/createPostgresResumableStreamContext.md)
 - [resumeStream](functions/resumeStream.md)

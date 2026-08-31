@@ -10,7 +10,7 @@ A Redis-like publisher. Designed to be compatible with clients from both the `re
 
 ## Properties
 
-### connect()
+### connect
 
 > **connect**: () => `Promise`\<`unknown`\>
 
@@ -20,9 +20,9 @@ A Redis-like publisher. Designed to be compatible with clients from both the `re
 
 ***
 
-### get()
+### get
 
-> **get**: (`key`) => `Promise`\<`null` \| `string` \| `number`\>
+> **get**: (`key`) => `Promise`\<`string` \| `number` \| `null`\>
 
 #### Parameters
 
@@ -32,11 +32,11 @@ A Redis-like publisher. Designed to be compatible with clients from both the `re
 
 #### Returns
 
-`Promise`\<`null` \| `string` \| `number`\>
+`Promise`\<`string` \| `number` \| `null`\>
 
 ***
 
-### incr()
+### incr
 
 > **incr**: (`key`) => `Promise`\<`number`\>
 
@@ -52,7 +52,7 @@ A Redis-like publisher. Designed to be compatible with clients from both the `re
 
 ***
 
-### publish()
+### publish
 
 > **publish**: (`channel`, `message`) => `Promise`\<`unknown`\>
 
@@ -72,7 +72,7 @@ A Redis-like publisher. Designed to be compatible with clients from both the `re
 
 ***
 
-### set()
+### set
 
 > **set**: (`key`, `value`, `options?`) => `Promise`\<`unknown`\>
 

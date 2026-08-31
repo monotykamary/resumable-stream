@@ -4,7 +4,7 @@
 
 [Resumable Stream](../README.md) / createResumableStreamContext
 
-# Variable: createResumableStreamContext()
+# Variable: createResumableStreamContext
 
 > `const` **createResumableStreamContext**: (`options`) => [`ResumableStreamContext`](../interfaces/ResumableStreamContext.md)
 

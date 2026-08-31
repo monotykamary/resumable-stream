@@ -15,21 +15,18 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8.15.7
-
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
       - name: Install dependencies
-        run: pnpm install
+        run: bun install
 
       - name: Generate documentation
-        run: pnpm run docs
+        run: bun run docs
 
       - name: Build
-        run: pnpm build
+        run: bun run build
 
       - name: Run tests with Redis
         env:
           REDIS_URL: ${{ secrets.REDIS_URL }}
-        run: pnpm test
+        run: bun run test

@@ -41,10 +41,10 @@
     "test": "DEBUG=1 vitest",
     "test:watch": "vitest watch",
     "clean": "rimraf dist",
-    "build": "tsc -p tsconfig.build.json && pnpm run docs",
-    "prepublishOnly": "pnpm build && test -d dist && test -n \"$(ls -A dist)\" || (echo 'ERROR: dist/ is empty or does not exist' && exit 1)",
+    "build": "tsc -p tsconfig.build.json && bun run docs",
+    "prepublishOnly": "bun run build && test -d dist && test -n \"$(ls -A dist)\" || (echo 'ERROR: dist/ is empty or does not exist' && exit 1)",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
-    "docs": "rimraf docs && pnpm typedoc",
+    "docs": "rimraf docs && bun run typedoc",
     "postgres:setup": "tsx src/cli/postgres-setup.ts",
     "postgres:cleanup": "tsx src/cli/postgres-cleanup.ts",
     "postgres:benchmark": "tsx scripts/postgres-benchmark.ts"
@@ -74,6 +74,5 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@11.20.0"
+  "license": "ISC"
 }

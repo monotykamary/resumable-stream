@@ -10,7 +10,7 @@
 
 ## Properties
 
-### publisher()
+### publisher
 
 > **publisher**: () => [`Publisher`](../../../../interfaces/Publisher.md)
 
@@ -22,7 +22,7 @@ A pubsub publisher. Designed to be compatible with clients from the `redis` pack
 
 ***
 
-### subscriber()
+### subscriber
 
 > **subscriber**: () => [`Subscriber`](../../../../interfaces/Subscriber.md)
 

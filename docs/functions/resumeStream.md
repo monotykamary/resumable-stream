@@ -6,7 +6,7 @@
 
 # Function: resumeStream()
 
-> **resumeStream**(`ctx`, `streamId`, `skipCharacters?`): `Promise`\<`null` \| `ReadableStream`\<`string`\>\>
+> **resumeStream**(`ctx`, `streamId`, `skipCharacters?`): `Promise`\<`ReadableStream`\<`string`\> \| `null`\>
 
 ## Parameters
 
@@ -24,4 +24,4 @@
 
 ## Returns
 
-`Promise`\<`null` \| `ReadableStream`\<`string`\>\>
+`Promise`\<`ReadableStream`\<`string`\> \| `null`\>
